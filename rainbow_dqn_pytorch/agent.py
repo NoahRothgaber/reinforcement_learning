@@ -27,6 +27,7 @@ matplotlib.use('Agg')
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 device = 'cpu'  # force cpu, sometimes GPU not always faster than CPU due to overhead of moving data to GPU
+
 class DQN(nn.Module):
     def __init__(self, state_dim, action_dim, hidden_dim=256):
         super(DQN, self).__init__()
@@ -56,13 +57,16 @@ class Agent():
         self.epsilon_min = hyperparameters['epsilon_min']
         self.stop_on_reward = hyperparameters['stop_on_reward']
         self.fc1_nodes = hyperparameters['fc1_nodes']
-        self.alpha = hyperparameters.get('alpha', 0.6)  # Default alpha value for prioritized sampling
+        self.alpha = hyperparameters['alpha']  # Default alpha value for prioritized sampling
+        self.beta = hyperparameters['beta']
         self.env_make_params = hyperparameters.get('env_make_params', {})
         self.loss_fn = nn.MSELoss()
         self.optimizer = None
         self.LOG_FILE = os.path.join(RUNS_DIR, f'{self.hyperparameter_set}.log')
         self.MODEL_FILE = os.path.join(RUNS_DIR, f'{self.hyperparameter_set}.pt')
         self.GRAPH_FILE = os.path.join(RUNS_DIR, f'{self.hyperparameter_set}.png')
+        self.implementation = "DQN w/ priortized experience replay buffer"
+        self.graph_title = f'{self.implementation} using {self.env_id}'
 
         # Store additional parameters
         self.train = train
@@ -141,7 +145,7 @@ class Agent():
                     last_graph_update_time = current_time
 
                 if len(memory) > self.mini_batch_size:
-                    mini_batch = memory.sample_batch(beta=0.4)
+                    mini_batch = memory.sample_batch(self.beta)
                     self.optimize(mini_batch, policy_dqn, target_dqn, memory)
                     epsilon = max(epsilon * self.epsilon_decay, self.epsilon_min)
                     epsilon_history.append(epsilon)
@@ -150,48 +154,48 @@ class Agent():
                         step_count = 0
 
     def save_graph(self, rewards_per_episode, epsilon_history):
-            # Save plots
-            plt.title(self.env_id)
-            fig, ax1 = plt.subplots()
-            
-            # Plot average rewards (Y-axis) vs episodes (X-axis)
-            mean_rewards = np.zeros(len(rewards_per_episode))
-            for x in range(len(mean_rewards)):
-                mean_rewards[x] = np.mean(rewards_per_episode[max(0, x-99):(x+1)])
+        # Save plots
+        plt.title(self.env_id)
+        fig, ax1 = plt.subplots()
 
-            mean_total = np.zeros(len(rewards_per_episode))
-            for x in range(len(mean_total)):
-                mean_total[x] = np.mean(rewards_per_episode[0:(x+1)])
-            
-            ax1.set_xlabel('Episodes')
-            ax1.set_ylabel('Mean Reward Last 100 Episodes', color='tab:blue')
-            ax1.plot(mean_rewards, color='tab:blue')
-            ax1.tick_params(axis='y', labelcolor='tab:blue')
+        # Plot average rewards (Y-axis) vs episodes (X-axis)
+        mean_rewards = np.zeros(len(rewards_per_episode))
+        for x in range(len(mean_rewards)):
+            mean_rewards[x] = np.mean(rewards_per_episode[max(0, x-99):(x+1)])
 
-            # Create a second y-axis
-            ax2 = ax1.twinx()
-            ax2.set_ylabel('Epsilon Decay', color='tab:red')
-            ax2.plot(epsilon_history, color='tab:red')
-            ax2.tick_params(axis='y', labelcolor='tab:red')
+        mean_total = np.zeros(len(rewards_per_episode))
+        for x in range(len(mean_total)):
+            mean_total[x] = np.mean(rewards_per_episode[0:(x+1)])
 
-            # Create a third y-axis
-            ax3 = ax1.twinx()
-            ax3.spines["right"].set_position(("outward", 60))
-            ax3.set_ylabel('Cumulative Mean Reward', color='tab:green')
-            ax3.plot(mean_total, color='tab:green', linestyle='--')
-            ax3.tick_params(axis='y', labelcolor='tab:green')
+        ax1.set_xlabel('Episodes')
+        ax1.set_ylabel('Mean Reward Last 100 Episodes', color='tab:blue')
+        ax1.plot(mean_rewards, color='tab:blue')
+        ax1.tick_params(axis='y', labelcolor='tab:blue')
 
-            # Make y axis 1 and 3 the same scale
-            ax1.set_ylim([min(min(mean_rewards), min(mean_total)), max(max(mean_rewards), max(mean_total))])
-            ax3.set_ylim(ax1.get_ylim())
+        # Create a second y-axis
+        ax2 = ax1.twinx()
+        ax2.set_ylabel('Epsilon Decay', color='tab:red')
+        ax2.plot(epsilon_history, color='tab:red')
+        ax2.tick_params(axis='y', labelcolor='tab:red')
 
-            # Add a legend
-            # fig.legend(loc='upper left', bbox_to_anchor=(0.1, 0.9))
-            plt.title(self.env_id)
-            # Save the figure
-            fig.tight_layout()  # Adjust layout to prevent overlap
-            fig.savefig(self.GRAPH_FILE)
-            plt.close(fig)
+        # Create a third y-axis
+        ax3 = ax1.twinx()
+        ax3.spines["right"].set_position(("outward", 60))
+        ax3.set_ylabel('Cumulative Mean Reward', color='tab:green')
+        ax3.plot(mean_total, color='tab:green', linestyle='--')
+        ax3.tick_params(axis='y', labelcolor='tab:green')
+
+        # Make y axis 1 and 3 the same scale
+        ax1.set_ylim([min(min(mean_rewards), min(mean_total)), max(max(mean_rewards), max(mean_total))])
+        ax3.set_ylim(ax1.get_ylim())
+
+        # Add a legend
+        # fig.legend(loc='upper left', bbox_to_anchor=(0.1, 0.9))
+        plt.title(self.graph_title)
+        # Save the figure
+        fig.tight_layout()  # Adjust layout to prevent overlap
+        fig.savefig(self.GRAPH_FILE)
+        plt.close(fig)
 
     def optimize(self, mini_batch, policy_dqn, target_dqn, memory):
         states = torch.tensor(mini_batch['obs'], dtype=torch.float, device=device)
@@ -205,7 +209,7 @@ class Agent():
             target_q = rewards + (1 - terminations) * self.discount_factor_g * target_dqn(new_states).max(dim=1)[0]
 
         current_q = policy_dqn(states).gather(dim=1, index=actions.unsqueeze(dim=1)).squeeze()
-        
+
         # Compute loss for the entire mini-batch
         loss = self.loss_fn(current_q, target_q)
 
@@ -220,6 +224,7 @@ class Agent():
         priorities = (weighted_loss.detach().cpu().numpy() + 1e-5)  # Avoid zero priority
         mini_batch_indices = mini_batch['indices']
         memory.update_priorities(mini_batch_indices, priorities)
+
 if __name__ == '__main__':
     # Parse command line inputs
     parser = argparse.ArgumentParser(description='Train or test model.')
