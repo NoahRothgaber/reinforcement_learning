@@ -10,6 +10,8 @@ cartpole1:
   discount_factor_g: 0.99
   stop_on_reward: 100000
   fc1_nodes: 10
+  alpha: 0.1
+  beta: 0.3
 
 flappybird1:
   env_id: FlappyBird-v0
