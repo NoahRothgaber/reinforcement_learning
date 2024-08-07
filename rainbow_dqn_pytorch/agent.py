@@ -14,7 +14,7 @@ import itertools
 import os
 from prioritized_replay_buffer import PrioritizedReplayBuffer
 
-# Currently Utilizing Double DQN, Dueling DQN, PERB (Prioritized Experience Replay Buffer), noise to be added next. 
+# Currently Utilizing Double DQN, Dueling DQN, PERB (Prioritized Experience Replay Buffer), noise to be added. 
 
 # For printing date and time
 DATE_FORMAT = "%m-%d %H:%M:%S"
