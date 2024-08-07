@@ -31,12 +31,35 @@ device = 'cpu'  # force cpu, sometimes GPU not always faster than CPU due to ove
 class DQN(nn.Module):
     def __init__(self, state_dim, action_dim, hidden_dim=256):
         super(DQN, self).__init__()
-        self.fc1 = nn.Linear(state_dim, hidden_dim)
-        self.output = nn.Linear(hidden_dim, action_dim)
+        self.feature_layer = nn.Sequential(
+            nn.Linear(state_dim, hidden_dim),
+            nn.ReLU(),
+        )
+        self.advantage_layer = nn.Sequential(
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, action_dim),
+        )
+        self.value_layer = nn.Sequential(
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, 1),
+        )
 
     def forward(self, x):
-        x = F.relu(self.fc1(x))
-        return self.output(x)
+        #Forward method implementation
+        # Pass input through the common feature layer
+        feature = self.feature_layer(x)
+        
+        # Pass the feature through the value stream
+        value = self.value_layer(feature)
+        # Pass the feature through the advantage stream
+        advantage = self.advantage_layer(feature)
+
+        # Combine value and advantage to compute Q-values
+        q = value + advantage - advantage.mean(dim=-1, keepdim=True)
+        
+        return q
 
 # Deep Q-Learning Agent
 class Agent():
@@ -62,10 +85,23 @@ class Agent():
         self.env_make_params = hyperparameters.get('env_make_params', {})
         self.loss_fn = nn.MSELoss()
         self.optimizer = None
+        self.rewards_per_episode = []
         self.LOG_FILE = os.path.join(RUNS_DIR, f'{self.hyperparameter_set}.log')
         self.MODEL_FILE = os.path.join(RUNS_DIR, f'{self.hyperparameter_set}.pt')
         self.GRAPH_FILE = os.path.join(RUNS_DIR, f'{self.hyperparameter_set}.png')
-        self.implementation = "DQN w/ priortized experience replay buffer"
+        # For printing date and time
+        self.DATE_FORMAT = "%m-%d %H:%M:%S"
+        self.env = gym.make(self.env_id, render_mode='human' if render else None, **self.env_make_params)
+        self.num_actions = self.env.action_space.n
+        self.num_states = self.env.observation_space.shape[0]
+        self.rewards_per_episode = []
+        self.policy_dqn = DQN(self.num_states, self.num_actions, self.fc1_nodes).to(device)
+
+        # Directory for saving run info
+        self.RUNS_DIR = "runs"
+        os.makedirs(self.RUNS_DIR, exist_ok=True)
+
+        self.implementation = "DDQN w/ PERB and Dueling DQN"
         self.graph_title = f'{self.implementation} using {self.env_id}'
 
         # Store additional parameters
@@ -75,7 +111,12 @@ class Agent():
         self.render = render
         self.use_gpu = use_gpu
 
+        if self.train:
+            start_time = datetime.now()
+            self.last_graph_update_time = start_time
+
     def run(self, is_training=True, render=True):
+        best_average_reward = None
         if is_training:
             start_time = datetime.now()
             last_graph_update_time = start_time
@@ -84,40 +125,35 @@ class Agent():
             with open(self.LOG_FILE, 'w') as file:
                 file.write(log_message + '\n')
 
-        env = gym.make(self.env_id, render_mode='human' if render else None, **self.env_make_params)
-        num_actions = env.action_space.n
-        num_states = env.observation_space.shape[0]
-        rewards_per_episode = []
-        policy_dqn = DQN(num_states, num_actions, self.fc1_nodes).to(device)
-
         if is_training:
             epsilon = self.epsilon_init
-            memory = PrioritizedReplayBuffer(num_states, self.replay_memory_size, self.mini_batch_size, self.alpha)
-            target_dqn = DQN(num_states, num_actions, self.fc1_nodes).to(device)
-            target_dqn.load_state_dict(policy_dqn.state_dict())
-            self.optimizer = torch.optim.Adam(policy_dqn.parameters(), lr=self.learning_rate_a)
-            epsilon_history = []
+            memory = PrioritizedReplayBuffer(self.num_states, self.replay_memory_size, self.mini_batch_size, self.alpha)
+            target_dqn = DQN(self.num_states, self.num_actions, self.fc1_nodes).to(device)
+            target_dqn.load_state_dict(self.policy_dqn.state_dict())
+            self.optimizer = torch.optim.Adam(self.policy_dqn.parameters(), lr=self.learning_rate_a)
+            self.epsilon_history = []
             step_count = 0
             best_reward = -9999999
         else:
-            policy_dqn.load_state_dict(torch.load(self.MODEL_FILE))
-            policy_dqn.eval()
+            self.policy_dqn.load_state_dict(torch.load(self.MODEL_FILE))
+            self.policy_dqn.eval()
 
         for episode in itertools.count():
-            state, _ = env.reset()
+            state, _ = self.env.reset()
             state = torch.tensor(state, dtype=torch.float, device=device)
             terminated = False
+            truncated = False
             episode_reward = 0.0
 
-            while not terminated and episode_reward < self.stop_on_reward:
+            while not terminated and not truncated and episode_reward < self.stop_on_reward:
                 if is_training and random.random() < epsilon:
-                    action = env.action_space.sample()
+                    action = self.env.action_space.sample()
                     action = torch.tensor(action, dtype=torch.int64, device=device)
                 else:
                     with torch.no_grad():
-                        action = policy_dqn(state.unsqueeze(dim=0)).squeeze().argmax()
+                        action = self.policy_dqn(state.unsqueeze(dim=0)).squeeze().argmax()
 
-                new_state, reward, terminated, truncated, info = env.step(action.item())
+                new_state, reward, terminated, truncated, info = self.env.step(action.item())
                 episode_reward += reward
                 new_state = torch.tensor(new_state, dtype=torch.float, device=device)
                 reward = torch.tensor(reward, dtype=torch.float, device=device)
@@ -128,30 +164,78 @@ class Agent():
 
                 state = new_state
 
-            rewards_per_episode.append(episode_reward)
+            self.rewards_per_episode.append(episode_reward)
 
+            # if is_training:
+            #     average_reward = np.mean(self.rewards_per_episode[-100:])
+            #     if average_reward >= (self.stop_on_reward * 0.98):
+            #         print(f'Average meets/exceeds best reward for environment {(self.stop_on_reward * 0.98)}... saving model...')
+
+            #     if episode_reward > best_reward:
+            #         log_message = f"{datetime.now().strftime(DATE_FORMAT)}: New best reward {episode_reward:0.1f} ({(episode_reward-best_reward)/best_reward*100:+.1f}%) at episode {episode}, saving model..."
+            #         print(log_message)
+            #         with open(self.LOG_FILE, 'a') as file:
+            #             file.write(log_message + '\n')
+            #         # torch.save(policy_dqn.state_dict(), self.MODEL_FILE)
+            #         best_reward = episode_reward
+
+            #     current_time = datetime.now()
+            #     if current_time - last_graph_update_time > timedelta(seconds=10):
+            #         self.save_graph(rewards_per_episode, epsilon_history)
+            #         last_graph_update_time = current_time
             if is_training:
-                if episode_reward > best_reward:
-                    log_message = f"{datetime.now().strftime(DATE_FORMAT)}: New best reward {episode_reward:0.1f} ({(episode_reward-best_reward)/best_reward*100:+.1f}%) at episode {episode}, saving model..."
+                current_time = datetime.now()
+                if current_time - self.last_graph_update_time > timedelta(seconds=10):
+                    self.save_graph(self.rewards_per_episode, epsilon_history=self.epsilon_history)
+                    self.last_graph_update_time = current_time
+                
+                average_reward = np.mean(self.rewards_per_episode[-100:])
+                if average_reward >= (self.stop_on_reward * 0.98):
+                    self.save()
+                    log_message = f'Average meets/exceeds best reward for environment **{(self.stop_on_reward * 0.98)}**... saving model...'
+                    print(log_message)
+                    with open(self.LOG_FILE, 'a') as file:
+                            file.write(log_message + '\n')
+                    self.save_graph(self.rewards_per_episode, epsilon_history=self.epsilon_history)        
+                    exit()
+                if (episode + 1) % 100 == 0:
+                    if best_average_reward == None:
+                        best_average_reward = average_reward
+    
+                    time_now = datetime.now()
+                    log_message = f"{time_now.strftime(self.DATE_FORMAT)}: Average Reward over last 100 episodes: {average_reward:0.1f} at episode: {episode + 1}"
                     print(log_message)
                     with open(self.LOG_FILE, 'a') as file:
                         file.write(log_message + '\n')
-                    torch.save(policy_dqn.state_dict(), self.MODEL_FILE)
+                    if average_reward >= best_average_reward:
+                        best_average_reward = average_reward  # Update the best average reward
+                        # Save model
+                        self.save()
+                        log_message = f"{time_now.strftime(self.DATE_FORMAT)}: New Best Average Reward: {best_average_reward:0.1f} at episode: {episode + 1}, saving model..."
+                        print(log_message)
+                        with open(self.LOG_FILE, 'a') as file:
+                            file.write(log_message + '\n')
+
+                if best_reward == None:
                     best_reward = episode_reward
 
-                current_time = datetime.now()
-                if current_time - last_graph_update_time > timedelta(seconds=10):
-                    self.save_graph(rewards_per_episode, epsilon_history)
-                    last_graph_update_time = current_time
+
+                if episode_reward > best_reward and episode > 0:
+                    log_message = f"{datetime.now().strftime(self.DATE_FORMAT)}: New Best Reward: {episode_reward:0.1f} ({abs((episode_reward-best_reward)/best_reward)*100:+.1f}%) at episode {episode}"
+                    print(log_message)
+                    best_reward = episode_reward
 
                 if len(memory) > self.mini_batch_size:
                     mini_batch = memory.sample_batch(self.beta)
-                    self.optimize(mini_batch, policy_dqn, target_dqn, memory)
+                    self.optimize(mini_batch, self.policy_dqn, target_dqn, memory)
                     epsilon = max(epsilon * self.epsilon_decay, self.epsilon_min)
-                    epsilon_history.append(epsilon)
+                    self.epsilon_history.append(epsilon)
                     if step_count > self.network_sync_rate:
-                        target_dqn.load_state_dict(policy_dqn.state_dict())
-                        step_count = 0
+                        target_dqn.load_state_dict(self.policy_dqn.state_dict())
+                        step_count = 0    
+            else:
+                log_message = f"{datetime.now().strftime(self.DATE_FORMAT)}: This Episode Reward: {episode_reward:0.1f}"
+                print(log_message)
 
     def save_graph(self, rewards_per_episode, epsilon_history):
         # Save plots
@@ -197,6 +281,12 @@ class Agent():
         fig.savefig(self.GRAPH_FILE)
         plt.close(fig)
 
+     # There is no functional difference between . pt and . pth when saving PyTorch models
+    def save(self):
+        if not os.path.exists(self.RUNS_DIR):
+            os.makedirs(self.RUNS_DIR)
+        torch.save(self.policy_dqn.state_dict(), f"{self.RUNS_DIR}/{self.hyperparameter_set}_actor.pth")
+    
     def optimize(self, mini_batch, policy_dqn, target_dqn, memory):
         states = torch.tensor(mini_batch['obs'], dtype=torch.float, device=device)
         actions = torch.tensor(mini_batch['acts'], dtype=torch.int64, device=device)
