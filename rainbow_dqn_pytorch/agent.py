@@ -13,7 +13,7 @@ import argparse
 import itertools
 import os
 from prioritized_replay_buffer import PrioritizedReplayBuffer
-
+from noisy_linear_network import NoisyLinear
 # Currently Utilizing Double DQN, Dueling DQN, PERB (Prioritized Experience Replay Buffer), noise to be added. 
 
 # For printing date and time
@@ -36,11 +36,8 @@ class DQN(nn.Module):
             nn.Linear(state_dim, hidden_dim),
             nn.ReLU(),
         )
-        self.advantage_layer = nn.Sequential(
-            nn.Linear(hidden_dim, hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, action_dim),
-        )
+        self.advantage_hidden_layer = NoisyLinear(hidden_dim, hidden_dim)
+        self.advantage_layer = NoisyLinear(hidden_dim, action_dim)
         self.value_layer = nn.Sequential(
             nn.Linear(hidden_dim, hidden_dim),
             nn.ReLU(),
@@ -61,6 +58,10 @@ class DQN(nn.Module):
         q = value + advantage - advantage.mean(dim=-1, keepdim=True)
         
         return q
+    
+    def reset_noise(self):
+        self.advantage_hidden_layer.reset_noise()
+        self.advantage_layer.reset_noise()
 
 # Deep Q-Learning Agent
 class Agent():
@@ -102,7 +103,7 @@ class Agent():
         self.RUNS_DIR = "runs"
         os.makedirs(self.RUNS_DIR, exist_ok=True)
 
-        self.implementation = "DDQN w/ PERB and Dueling DQN"
+        self.implementation = "DDQN w/ PERB, Dueling, and Noisy Network"
         self.graph_title = f'{self.implementation} using {self.env_id}'
 
         # Store additional parameters
@@ -147,6 +148,7 @@ class Agent():
             episode_reward = 0.0
 
             while not terminated and not truncated and episode_reward < self.stop_on_reward:
+                self.policy_dqn.reset_noise()   
                 if is_training and random.random() < epsilon:
                     action = self.env.action_space.sample()
                     action = torch.tensor(action, dtype=torch.int64, device=device)
