@@ -6,9 +6,13 @@ cartpole1:
   epsilon_decay: 0
   epsilon_min: 0
   network_sync_rate: 10
-  learning_rate_a: 0.001
+  learning_rate_a: 0.01
   discount_factor_g: 0.99
+<<<<<<< Updated upstream
   stop_on_reward: 100000
+=======
+  stop_on_reward: 5000
+>>>>>>> Stashed changes
   fc1_nodes: 10
   alpha: 0.1
   beta: 0.4
