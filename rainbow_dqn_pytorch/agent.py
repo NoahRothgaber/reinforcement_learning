@@ -82,6 +82,7 @@ class Agent():
         self.epsilon_min = hyperparameters['epsilon_min']
         self.stop_on_reward = hyperparameters['stop_on_reward']
         self.fc1_nodes = hyperparameters['fc1_nodes']
+        # noisy layer
         self.alpha = hyperparameters['alpha']  # Default alpha value for prioritized sampling
         self.beta = hyperparameters['beta']
         self.env_make_params = hyperparameters.get('env_make_params', {})
@@ -103,7 +104,7 @@ class Agent():
         self.RUNS_DIR = "runs"
         os.makedirs(self.RUNS_DIR, exist_ok=True)
 
-        self.implementation = "DDQN w/ PERB, Dueling, and Noisy Network"
+        self.implementation = "Categorical DDQN w/ PERB, Dueling, and Noisy Network"
         self.graph_title = f'{self.implementation} using {self.env_id}'
 
         # Store additional parameters
@@ -291,32 +292,32 @@ class Agent():
         torch.save(self.policy_dqn.state_dict(), f"{self.RUNS_DIR}/{self.hyperparameter_set}_actor.pth")
     
     def optimize(self, mini_batch, policy_dqn, target_dqn, memory):
-        states = torch.tensor(mini_batch['obs'], dtype=torch.float, device=device)
-        actions = torch.tensor(mini_batch['acts'], dtype=torch.int64, device=device)
-        rewards = torch.tensor(mini_batch['rews'], dtype=torch.float, device=device)
-        new_states = torch.tensor(mini_batch['next_obs'], dtype=torch.float, device=device)
-        terminations = torch.tensor(mini_batch['done'], dtype=torch.float, device=device)
-        weights = torch.tensor(mini_batch['weights'], dtype=torch.float, device=device)
+            states = torch.tensor(mini_batch['obs'], dtype=torch.float, device=device)
+            actions = torch.tensor(mini_batch['acts'], dtype=torch.int64, device=device)
+            rewards = torch.tensor(mini_batch['rews'], dtype=torch.float, device=device)
+            new_states = torch.tensor(mini_batch['next_obs'], dtype=torch.float, device=device)
+            terminations = torch.tensor(mini_batch['done'], dtype=torch.float, device=device)
+            weights = torch.tensor(mini_batch['weights'], dtype=torch.float, device=device)
 
-        with torch.no_grad():
-            target_q = rewards + (1 - terminations) * self.discount_factor_g * target_dqn(new_states).max(dim=1)[0]
+            with torch.no_grad():
+                target_q = rewards + (1 - terminations) * self.discount_factor_g * target_dqn(new_states).max(dim=1)[0]
 
-        current_q = policy_dqn(states).gather(dim=1, index=actions.unsqueeze(dim=1)).squeeze()
+            current_q = policy_dqn(states).gather(dim=1, index=actions.unsqueeze(dim=1)).squeeze()
 
-        # Compute loss for the entire mini-batch
-        loss = self.loss_fn(current_q, target_q)
+            # Compute loss for the entire mini-batch
+            loss = self.loss_fn(current_q, target_q)
 
-        # Apply importance sampling weight
-        weighted_loss = weights * loss  # Element-wise multiplication with weights
-        mean_weighted_loss = weighted_loss.mean()  # Mean across the batch
-        self.optimizer.zero_grad()
-        mean_weighted_loss.backward()  # Backpropagate the mean weighted loss
-        self.optimizer.step()
+            # Apply importance sampling weight
+            weighted_loss = weights * loss  # Element-wise multiplication with weights
+            mean_weighted_loss = weighted_loss.mean()  # Mean across the batch
+            self.optimizer.zero_grad()
+            mean_weighted_loss.backward()  # Backpropagate the mean weighted loss
+            self.optimizer.step()
 
-        # Update priorities for the sampled transitions
-        priorities = (weighted_loss.detach().cpu().numpy() + 1e-5)  # Avoid zero priority
-        mini_batch_indices = mini_batch['indices']
-        memory.update_priorities(mini_batch_indices, priorities)
+            # Update priorities for the sampled transitions
+            priorities = (weighted_loss.detach().cpu().numpy() + 1e-5)  # Avoid zero priority
+            mini_batch_indices = mini_batch['indices']
+            memory.update_priorities(mini_batch_indices, priorities)
 
 if __name__ == '__main__':
     # Parse command line inputs
