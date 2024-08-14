@@ -1,7 +1,7 @@
 cartpole1:
   env_id: CartPole-v1
-  replay_memory_size: 100000
-  mini_batch_size: 32
+  replay_memory_size: 10000
+  mini_batch_size: 256
   epsilon_init: 0
   epsilon_decay: 0
   epsilon_min: 0
@@ -12,6 +12,9 @@ cartpole1:
   fc1_nodes: 10
   alpha: 0.9
   beta: 0.4
+  v_min: 0.0
+  v_max: 200.0
+  atom_size: 51
 
 flappybird1:
   env_id: FlappyBird-v0
