@@ -14,6 +14,7 @@ import itertools
 import os
 from prioritized_replay_buffer import PrioritizedReplayBuffer
 from noisy_linear_network import NoisyLinear
+import torch.optim as optim
 # Currently Utilizing Double DQN, Dueling DQN, PERB (Prioritized Experience Replay Buffer), noise to be added. 
 
 # For printing date and time
@@ -30,38 +31,43 @@ device = 'cuda' if torch.cuda.is_available() else 'cpu'
 device = 'cpu'  # force cpu, sometimes GPU not always faster than CPU due to overhead of moving data to GPU
 
 class DQN(nn.Module):
-    def __init__(self, state_dim, action_dim, hidden_dim=256):
+    def __init__(self, state_dim, action_dim, support, atom_size, hidden_dim=256):
         super(DQN, self).__init__()
+        self.support = support
+        self.action_dim = action_dim
+        self.atom_size = atom_size
         self.feature_layer = nn.Sequential(
             nn.Linear(state_dim, hidden_dim),
             nn.ReLU(),
         )
         self.advantage_hidden_layer = NoisyLinear(hidden_dim, hidden_dim)
-        self.advantage_layer = NoisyLinear(hidden_dim, action_dim)
-        self.value_layer = nn.Sequential(
-            nn.Linear(hidden_dim, hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, 1),
-        )
+        self.advantage_layer = NoisyLinear(hidden_dim, action_dim * atom_size)
+        self.value_hidden_layer = NoisyLinear(hidden_dim, hidden_dim)
+        self.value_layer = NoisyLinear(hidden_dim, atom_size)
 
     def forward(self, x):
-        #Forward method implementation
-        # Pass input through the common feature layer
-        feature = self.feature_layer(x)
-        
-        # Pass the feature through the value stream
-        value = self.value_layer(feature)
-        # Pass the feature through the advantage stream
-        advantage = self.advantage_layer(feature)
-
-        # Combine value and advantage to compute Q-values
-        q = value + advantage - advantage.mean(dim=-1, keepdim=True)
-        
+        dist = self.dist(x)
+        q = torch.sum(dist * self.support, dim=2)        
         return q
     
+    def dist(self, x):
+        feature = self.feature_layer(x)
+        adv_hid = F.relu(self.advantage_hidden_layer(feature))
+        val_hid = F.relu(self.value_hidden_layer(feature))
+
+        advantage = self.advantage_layer(adv_hid).view(-1, self.action_dim, self.atom_size)
+        value = self.value_layer(val_hid).view(-1, 1, self.atom_size)
+        q_atoms = value + advantage - advantage.mean (dim=1, keepdim=True)
+
+        dist = F.softmax(q_atoms, dim=-1)
+        dist = dist.clamp(min = 1e-3)
+        return dist
+
     def reset_noise(self):
         self.advantage_hidden_layer.reset_noise()
         self.advantage_layer.reset_noise()
+        self.value_hidden_layer.reset_noise()
+        self.value_layer.reset_noise()
 
 # Deep Q-Learning Agent
 class Agent():
@@ -82,12 +88,17 @@ class Agent():
         self.epsilon_min = hyperparameters['epsilon_min']
         self.stop_on_reward = hyperparameters['stop_on_reward']
         self.fc1_nodes = hyperparameters['fc1_nodes']
+        
+        #categorical DQN params
+        self.v_min = hyperparameters['v_min']
+        self.v_max = hyperparameters['v_max']
+        self.atom_size = hyperparameters['atom_size']
+        self.n_step = hyperparameters['n_step']
         # noisy layer
         self.alpha = hyperparameters['alpha']  # Default alpha value for prioritized sampling
         self.beta = hyperparameters['beta']
         self.env_make_params = hyperparameters.get('env_make_params', {})
         self.loss_fn = nn.MSELoss()
-        self.optimizer = None
         self.rewards_per_episode = []
         self.LOG_FILE = os.path.join(RUNS_DIR, f'{self.hyperparameter_set}.log')
         self.MODEL_FILE = os.path.join(RUNS_DIR, f'{self.hyperparameter_set}.pt')
@@ -98,8 +109,17 @@ class Agent():
         self.num_actions = self.env.action_space.n
         self.num_states = self.env.observation_space.shape[0]
         self.rewards_per_episode = []
-        self.policy_dqn = DQN(self.num_states, self.num_actions, self.fc1_nodes).to(device)
+        # networks
+        self.support = torch.linspace(
+            self.v_min, self.v_max, self.atom_size
+        ).to(self.device)
+        self.policy_dqn = DQN(self.num_states, self.num_actions, self.atom_size, self.support).to(device)
+        self.target_dqn = DQN(self.num_states, self.num_actions, self.atom_size, self.support).to(device)
+        self.target_dqn.load_state_dict(self.policy_dqn.state_dict())
+        self.target_dqn.eval()
 
+        self.optimizer = optim.Adam(self.policy_dqn.parameters())
+        self.transition = list()
         # Directory for saving run info
         self.RUNS_DIR = "runs"
         os.makedirs(self.RUNS_DIR, exist_ok=True)
@@ -117,6 +137,18 @@ class Agent():
         if self.train:
             start_time = datetime.now()
             self.last_graph_update_time = start_time
+
+    def select_action(self, state):
+        # NoisyNet: no epsilon greedy action selection
+        selected_action = self.policy_dqn(
+            torch.FloatTensor(state).to(self.device)
+        ).argmax()
+        selected_action = selected_action.detach().cpu().numpy()
+        
+        if not self.train:
+            self.transition = [state, selected_action]
+        
+        return selected_action
 
     def run(self, is_training=True, render=True):
         best_average_reward = None
