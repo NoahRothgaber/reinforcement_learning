@@ -10,8 +10,6 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 
-# Source https://github.com/Curt-Park/rainbow-is-all-you-need/blob/master/05.noisy_net.ipynb
-
 class NoisyLinear(nn.Module):
     """Noisy linear module for NoisyNet.
     
