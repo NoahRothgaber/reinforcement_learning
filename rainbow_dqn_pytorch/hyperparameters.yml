@@ -15,6 +15,7 @@ cartpole1:
   v_min: 0.0
   v_max: 200.0
   atom_size: 51
+  n_step: 5
 
 flappybird1:
   env_id: FlappyBird-v0
