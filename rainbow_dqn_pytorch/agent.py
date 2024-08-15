@@ -12,7 +12,7 @@ from datetime import datetime, timedelta
 import argparse
 import itertools
 import os
-from prioritized_replay_buffer import PrioritizedReplayBuffer
+from prioritized_replay_buffer import PrioritizedReplayBuffer, ReplayBuffer
 from noisy_linear_network import NoisyLinear
 import torch.optim as optim
 from typing import Deque, Dict, List, Tuple
@@ -93,6 +93,7 @@ class Agent():
         self.v_min = hyperparameters['v_min']
         self.v_max = hyperparameters['v_max']
         self.atom_size = hyperparameters['atom_size']
+        #n_step dqn
         self.n_step = hyperparameters['n_step']
         # noisy layer
         self.alpha = hyperparameters['alpha']  # Default alpha value for prioritized sampling
@@ -118,7 +119,13 @@ class Agent():
         self.target_dqn = DQN(self.num_states, self.num_actions, atom_size=self.atom_size, support=self.support).to(self.device)
         self.target_dqn.load_state_dict(self.policy_dqn.state_dict())
         self.target_dqn.eval()
+        #memory for one step
         self.memory = PrioritizedReplayBuffer(self.num_states, self.replay_memory_size, self.mini_batch_size, alpha=self.alpha, gamma=self.discount_factor_g)
+
+        #  memory for N-step Learning
+        self.use_n_step = True if self.n_step > 1 else False
+        if self.use_n_step:
+            self.memory_n = ReplayBuffer(obs_dim=self.num_states, size=self.replay_memory_size, batch_size=self.mini_batch_size, n_step=self.n_step, gamma=self.discount_factor_g)
 
         self.optimizer = optim.Adam(self.policy_dqn.parameters())
         self.transition = list()
@@ -126,7 +133,7 @@ class Agent():
         self.RUNS_DIR = "runs"
         os.makedirs(self.RUNS_DIR, exist_ok=True)
 
-        self.implementation = "Categorical DDQN w/ PERB, Dueling, and Noisy Network"
+        self.implementation = "Full Rainbow DQN"
         self.graph_title = f'{self.implementation} using {self.env_id}'
 
         # Store additional parameters
@@ -158,10 +165,16 @@ class Agent():
         samples["weights"].reshape(-1,1)
         ).to(self.device)
         indices = samples["indices"]
-
-        # 1-step Learning loss
-        elementwise_loss = self._compute_dqn_loss(samples, self.gamma)
         
+        elementwise_loss = self._compute_dqn_loss(samples, self.discount_factor_g)
+
+        # N-step Learning loss
+        if self.use_n_step:
+            gamma = self.discount_factor_g ** self.n_step
+            samples_n = self.memory_n.sample_batch_from_idxs(indices)
+            elementwise_loss_n = self._compute_dqn_loss(samples_n, gamma)
+            elementwise_loss += elementwise_loss_n
+
         # PER: importance sampling before average
         loss = torch.mean(elementwise_loss * weights)
 
@@ -223,7 +236,18 @@ class Agent():
                 reward = torch.tensor(reward, dtype=torch.float, device=self.device)
 
                 if is_training:
-                    self.memory.store(state.cpu().numpy(), action.item(), reward.item(), new_state.cpu().numpy(), terminated)
+                    transition = (state.cpu().numpy(), action.item(), reward.item(), new_state.cpu().numpy(), terminated)
+                    
+                    # Store the transition in the n-step buffer first
+                    if self.use_n_step:
+                        one_step_transition = self.memory_n.store(*transition)
+                    else:
+                        one_step_transition = transition
+                    
+                    # If the n-step transition is ready, store it in the main memory
+                    if one_step_transition:
+                        self.memory.store(*one_step_transition)
+    
                     step_count += 1
 
                 state = new_state
