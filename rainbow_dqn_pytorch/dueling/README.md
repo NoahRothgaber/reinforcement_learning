@@ -1,0 +1,2 @@
+This is an implementation of the rainbow_dqn model using our exisiting framework for starter code. Currently implementing priortized experience replay and
+working on implementing dueling_dqn architecture. 
