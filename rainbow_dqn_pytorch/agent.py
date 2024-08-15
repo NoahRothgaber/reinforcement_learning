@@ -17,6 +17,7 @@ from noisy_linear_network import NoisyLinear
 import torch.optim as optim
 from typing import Deque, Dict, List, Tuple
 from torch.nn.utils import clip_grad_norm_
+import flappy_bird_gymnasium
 # Currently Utilizing Double DQN, Dueling DQN, PERB (Prioritized Experience Replay Buffer), noise to be added. 
 
 # For printing date and time
@@ -101,6 +102,9 @@ class Agent():
         self.env_make_params = hyperparameters.get('env_make_params', {})
         self.loss_fn = nn.MSELoss()
         self.rewards_per_episode = []
+        # Directory for saving run info
+        self.RUNS_DIR = "runs"
+        os.makedirs(self.RUNS_DIR, exist_ok=True)
         self.LOG_FILE = os.path.join(RUNS_DIR, f'{self.hyperparameter_set}.log')
         self.MODEL_FILE = os.path.join(RUNS_DIR, f'{self.hyperparameter_set}.pt')
         self.GRAPH_FILE = os.path.join(RUNS_DIR, f'{self.hyperparameter_set}.png')
@@ -129,9 +133,6 @@ class Agent():
 
         self.optimizer = optim.Adam(self.policy_dqn.parameters())
         self.transition = list()
-        # Directory for saving run info
-        self.RUNS_DIR = "runs"
-        os.makedirs(self.RUNS_DIR, exist_ok=True)
 
         self.implementation = "Full Rainbow DQN"
         self.graph_title = f'{self.implementation} using {self.env_id}'
@@ -424,7 +425,7 @@ class Agent():
     def save(self):
         if not os.path.exists(self.RUNS_DIR):
             os.makedirs(self.RUNS_DIR)
-        torch.save(self.policy_dqn.state_dict(), f"{self.RUNS_DIR}/{self.hyperparameter_set}_actor.pth")
+        torch.save(self.policy_dqn.state_dict(), f"{self.MODEL_FILE}")
     
     def optimize(self, mini_batch, policy_dqn, target_dqn, memory):
             states = torch.tensor(mini_batch['obs'], dtype=torch.float, device=self.device)
