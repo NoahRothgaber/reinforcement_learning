@@ -396,12 +396,6 @@ class Agent():
         ax1.plot(mean_rewards, color='tab:blue')
         ax1.tick_params(axis='y', labelcolor='tab:blue')
 
-        # Create a second y-axis
-        ax2 = ax1.twinx()
-        ax2.set_ylabel('Epsilon Decay', color='tab:red')
-        ax2.plot(epsilon_history, color='tab:red')
-        ax2.tick_params(axis='y', labelcolor='tab:red')
-
         # Create a third y-axis
         ax3 = ax1.twinx()
         ax3.spines["right"].set_position(("outward", 60))
