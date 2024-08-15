@@ -15,6 +15,8 @@ import os
 from prioritized_replay_buffer import PrioritizedReplayBuffer
 from noisy_linear_network import NoisyLinear
 import torch.optim as optim
+from typing import Deque, Dict, List, Tuple
+from torch.nn.utils import clip_grad_norm_
 # Currently Utilizing Double DQN, Dueling DQN, PERB (Prioritized Experience Replay Buffer), noise to be added. 
 
 # For printing date and time
@@ -27,8 +29,6 @@ os.makedirs(RUNS_DIR, exist_ok=True)
 # 'Agg': used to generate plots as images and save them to a file instead of rendering to screen
 matplotlib.use('Agg')
 
-device = 'cuda' if torch.cuda.is_available() else 'cpu'
-device = 'cpu'  # force cpu, sometimes GPU not always faster than CPU due to overhead of moving data to GPU
 
 class DQN(nn.Module):
     def __init__(self, state_dim, action_dim, support, atom_size, hidden_dim=256):
@@ -109,14 +109,16 @@ class Agent():
         self.num_actions = self.env.action_space.n
         self.num_states = self.env.observation_space.shape[0]
         self.rewards_per_episode = []
+        self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
         # networks
         self.support = torch.linspace(
             self.v_min, self.v_max, self.atom_size
         ).to(self.device)
-        self.policy_dqn = DQN(self.num_states, self.num_actions, self.atom_size, self.support).to(device)
-        self.target_dqn = DQN(self.num_states, self.num_actions, self.atom_size, self.support).to(device)
+        self.policy_dqn = DQN(self.num_states, self.num_actions, atom_size=self.atom_size, support=self.support).to(self.device)
+        self.target_dqn = DQN(self.num_states, self.num_actions, atom_size=self.atom_size, support=self.support).to(self.device)
         self.target_dqn.load_state_dict(self.policy_dqn.state_dict())
         self.target_dqn.eval()
+        self.memory = PrioritizedReplayBuffer(self.num_states, self.replay_memory_size, self.mini_batch_size, alpha=self.alpha, gamma=self.discount_factor_g)
 
         self.optimizer = optim.Adam(self.policy_dqn.parameters())
         self.transition = list()
@@ -150,6 +152,36 @@ class Agent():
         
         return selected_action
 
+    def update_model(self):
+        samples = self.memory.sample_batch(self.beta)
+        weights = torch.FloatTensor(
+        samples["weights"].reshape(-1,1)
+        ).to(self.device)
+        indices = samples["indices"]
+
+        # 1-step Learning loss
+        elementwise_loss = self._compute_dqn_loss(samples, self.gamma)
+        
+        # PER: importance sampling before average
+        loss = torch.mean(elementwise_loss * weights)
+
+        self.optimizer.zero_grad()
+        loss.backward()
+        clip_grad_norm_(self.dqn.parameters(), 10.0)
+        self.optimizer.step()
+        
+        # PER: update priorities
+        loss_for_prior = elementwise_loss.detach().cpu().numpy()
+        new_priorities = loss_for_prior + self.prior_eps
+        self.memory.update_priorities(indices, new_priorities)
+        
+        # NoisyNet: reset noise
+        self.dqn.reset_noise()
+        self.dqn_target.reset_noise()
+
+        return loss.item()
+        
+    
     def run(self, is_training=True, render=True):
         best_average_reward = None
         if is_training:
@@ -162,10 +194,6 @@ class Agent():
 
         if is_training:
             epsilon = self.epsilon_init
-            memory = PrioritizedReplayBuffer(self.num_states, self.replay_memory_size, self.mini_batch_size, self.alpha)
-            target_dqn = DQN(self.num_states, self.num_actions, self.fc1_nodes).to(device)
-            target_dqn.load_state_dict(self.policy_dqn.state_dict())
-            self.optimizer = torch.optim.Adam(self.policy_dqn.parameters(), lr=self.learning_rate_a)
             self.epsilon_history = []
             step_count = 0
             best_reward = -9999999
@@ -175,7 +203,7 @@ class Agent():
 
         for episode in itertools.count():
             state, _ = self.env.reset()
-            state = torch.tensor(state, dtype=torch.float, device=device)
+            state = torch.tensor(state, dtype=torch.float, device=self.device)
             terminated = False
             truncated = False
             episode_reward = 0.0
@@ -184,18 +212,18 @@ class Agent():
                 self.policy_dqn.reset_noise()   
                 if is_training and random.random() < epsilon:
                     action = self.env.action_space.sample()
-                    action = torch.tensor(action, dtype=torch.int64, device=device)
+                    action = torch.tensor(action, dtype=torch.int64, device=self.device)
                 else:
                     with torch.no_grad():
                         action = self.policy_dqn(state.unsqueeze(dim=0)).squeeze().argmax()
 
                 new_state, reward, terminated, truncated, info = self.env.step(action.item())
                 episode_reward += reward
-                new_state = torch.tensor(new_state, dtype=torch.float, device=device)
-                reward = torch.tensor(reward, dtype=torch.float, device=device)
+                new_state = torch.tensor(new_state, dtype=torch.float, device=self.device)
+                reward = torch.tensor(reward, dtype=torch.float, device=self.device)
 
                 if is_training:
-                    memory.store(state.cpu().numpy(), action.item(), reward.item(), new_state.cpu().numpy(), terminated)
+                    self.memory.store(state.cpu().numpy(), action.item(), reward.item(), new_state.cpu().numpy(), terminated)
                     step_count += 1
 
                 state = new_state
@@ -261,18 +289,69 @@ class Agent():
                     print(log_message)
                     best_reward = episode_reward
 
-                if len(memory) > self.mini_batch_size:
-                    mini_batch = memory.sample_batch(self.beta)
-                    self.optimize(mini_batch, self.policy_dqn, target_dqn, memory)
+                if len(self.memory) > self.mini_batch_size:
+                    mini_batch = self.memory.sample_batch(self.beta)
+                    self.optimize(mini_batch, self.policy_dqn, self.target_dqn, self.memory)
                     epsilon = max(epsilon * self.epsilon_decay, self.epsilon_min)
                     self.epsilon_history.append(epsilon)
                     if step_count > self.network_sync_rate:
-                        target_dqn.load_state_dict(self.policy_dqn.state_dict())
+                        self.target_dqn.load_state_dict(self.policy_dqn.state_dict())
                         step_count = 0    
             else:
                 log_message = f"{datetime.now().strftime(self.DATE_FORMAT)}: This Episode Reward: {episode_reward:0.1f}"
                 print(log_message)
 
+    def _compute_dqn_loss(self, samples: Dict[str, np.ndarray], gamma: float) -> torch.Tensor:
+        """Return categorical dqn loss."""
+        device = self.device  # for shortening the following lines
+        state = torch.FloatTensor(samples["obs"]).to(device)
+        next_state = torch.FloatTensor(samples["next_obs"]).to(device)
+        action = torch.LongTensor(samples["acts"]).to(device)
+        reward = torch.FloatTensor(samples["rews"].reshape(-1, 1)).to(device)
+        done = torch.FloatTensor(samples["done"].reshape(-1, 1)).to(device)
+        
+        # Categorical DQN algorithm
+        delta_z = float(self.v_max - self.v_min) / (self.atom_size - 1)
+
+        with torch.no_grad():
+            # Double DQN
+            next_action = self.policy_dqn(next_state).argmax(1)
+            next_dist = self.target_dqn.dist(next_state)
+            next_dist = next_dist[range(self.mini_batch_size), next_action]
+
+            t_z = reward + (1 - done) * gamma * self.support
+            t_z = t_z.clamp(min=self.v_min, max=self.v_max)
+            b = (t_z - self.v_min) / delta_z
+            l = b.floor().long()
+            u = b.ceil().long()
+
+            offset = (
+                torch.linspace(
+                    0, (self.mini_batch_size - 1) * self.atom_size, self.mini_batch_size
+                ).long()
+                .unsqueeze(1)
+                .expand(self.mini_batch_size, self.atom_size)
+                .to(device)
+            )
+
+            proj_dist = torch.zeros(next_dist.size(), device=self.device)
+            proj_dist.view(-1).index_add_(
+                0, (l + offset).view(-1), (next_dist * (u.float() - b)).view(-1)
+            )
+            proj_dist.view(-1).index_add_(
+                0, (u + offset).view(-1), (next_dist * (b - l.float())).view(-1)
+            )
+
+        dist = self.policy_dqn.dist(state)
+        log_p = torch.log(dist[range(self.mini_batch_size), action])
+        elementwise_loss = -(proj_dist * log_p).sum(1)
+
+        return elementwise_loss
+    
+    def _target_hard_update(self):
+        """Hard update: target <- local."""
+        self.target_dqn.load_state_dict(self.policy_dqn.state_dict())
+    
     def save_graph(self, rewards_per_episode, epsilon_history):
         # Save plots
         plt.title(self.env_id)
@@ -324,12 +403,12 @@ class Agent():
         torch.save(self.policy_dqn.state_dict(), f"{self.RUNS_DIR}/{self.hyperparameter_set}_actor.pth")
     
     def optimize(self, mini_batch, policy_dqn, target_dqn, memory):
-            states = torch.tensor(mini_batch['obs'], dtype=torch.float, device=device)
-            actions = torch.tensor(mini_batch['acts'], dtype=torch.int64, device=device)
-            rewards = torch.tensor(mini_batch['rews'], dtype=torch.float, device=device)
-            new_states = torch.tensor(mini_batch['next_obs'], dtype=torch.float, device=device)
-            terminations = torch.tensor(mini_batch['done'], dtype=torch.float, device=device)
-            weights = torch.tensor(mini_batch['weights'], dtype=torch.float, device=device)
+            states = torch.tensor(mini_batch['obs'], dtype=torch.float, device=self.device)
+            actions = torch.tensor(mini_batch['acts'], dtype=torch.int64, device=self.device)
+            rewards = torch.tensor(mini_batch['rews'], dtype=torch.float, device=self.device)
+            new_states = torch.tensor(mini_batch['next_obs'], dtype=torch.float, device=self.device)
+            terminations = torch.tensor(mini_batch['done'], dtype=torch.float, device=self.device)
+            weights = torch.tensor(mini_batch['weights'], dtype=torch.float, device=self.device)
 
             with torch.no_grad():
                 target_q = rewards + (1 - terminations) * self.discount_factor_g * target_dqn(new_states).max(dim=1)[0]
