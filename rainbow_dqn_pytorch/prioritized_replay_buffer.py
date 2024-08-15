@@ -1,7 +1,9 @@
 from segment_tree import SumSegmentTree, MinSegmentTree
 import random
 import numpy as np
-from typing import Dict, List, Tuple
+from typing import Deque, Dict, List, Tuple
+from collections import deque
+
 class ReplayBuffer:
     """A simple numpy replay buffer."""
 
