@@ -19,7 +19,7 @@ import yaml
 from datetime import datetime, timedelta
 import os
 
-from td3 import TD3_Actor, TD3_Critic
+from sac import SAC_Actor, SAC_Critic, SAC_Entropy
 
 # 'Agg': used to generate plots as images and save them to a file instead of rendering to screen
 matplotlib.use('Agg')
@@ -39,7 +39,7 @@ class ReplayBuffer():
     def size(self):
         return len(self.buffer)
 
-# TD3 Agent
+# SAC Agent
 class Agent():
 
     def __init__(self, is_training, endless, continue_training, render, use_gpu, hyperparameter_set):
@@ -48,8 +48,6 @@ class Agent():
             hyperparameters = all_hyperparameter_sets[hyperparameter_set]
 
         self.hyperparameter_set = hyperparameter_set
-        self.is_training = is_training
-        self.continue_training = continue_training
 
         self.env_id                 = hyperparameters['env_id']
         self.input_model_name       = hyperparameters['input_model_name']
@@ -58,8 +56,8 @@ class Agent():
         self.action_dim             = hyperparameters['action_dim']
         self.action_low             = hyperparameters['action_low']
         self.action_high            = hyperparameters['action_high']
-        self.replay_buffer_size     = hyperparameters['replay_memory_size']         # size of replay memory
-        self.batch_size             = hyperparameters['mini_batch_size']            # size of the training data set sampled from the replay memory
+        self.replay_memory_size     = hyperparameters['replay_memory_size']         # size of replay memory
+        self.batch_size             = hyperparameters['batch_size']            # size of the training data set sampled from the replay memory
         self.discount               = hyperparameters['discount']
         self.tau                    = hyperparameters['tau']
         self.learning_rate          = hyperparameters['learning_rate']
@@ -70,6 +68,10 @@ class Agent():
         self.max_reward             = hyperparameters['max_reward']
         self.max_timestep           = hyperparameters['max_timestep']
         self.max_episodes           = hyperparameters['max_episodes']
+        self.alpha                  = hyperparameters['alpha']
+        self.entropy_coefficient    = hyperparameters['entropy_coefficient'] 
+        self.minimum_entropy        = hyperparameters['minimum_entropy']
+        self.entropy_decay          = hyperparameters['entropy_decay']
         self.env_make_params        = hyperparameters.get('env_make_params',{})     # Get optional environment-specific parameters, default to empty dict
 
         if self.input_model_name == None:
@@ -93,13 +95,10 @@ class Agent():
             self.device = 'cpu'
 
         # set endless mode if endless arg is true, otherwise set max episodes based on parameters 
-        if endless or not self.is_training:
+        if endless or not is_training:
             self.max_episodes = itertools.count()
         else:
             self.max_episodes = range(self.max_episodes)
-
-        if self.continue_training:
-            self.is_training = True
 
         # Create instance of the environment.
         self.env = gym.make(self.env_id, render_mode='human' if render else None, **self.env_make_params)
@@ -108,30 +107,35 @@ class Agent():
         self.num_actions = self.env.action_space.shape[0]
         self.num_states = self.env.observation_space.shape[0] # Expecting type: Box(low, high, (shape0,), float64)
 
+        # Target Entropy 
+        self.target_entropy = -np.prod(self.entropy_coefficient) 
+
         # List to keep track of rewards collected per episode.
         self.rewards_per_episode = []
         self.total_it = 0
+        self.target_entropies = []  # List to track target entropy values
 
-    
         # Create actor and critic networks
-        self.actor = TD3_Actor(self.num_states, self.num_actions, use_gpu, self.action_low, self.action_high).to(self.device)
-        self.actor_target = TD3_Actor(self.num_states, self.action_dim, use_gpu, self.action_low, self.action_high).to(self.device)
-        self.actor_target.load_state_dict(self.actor.state_dict())
+        self.actor = SAC_Actor(self.num_states, self.num_actions, use_gpu, self.action_low, self.action_high).to(self.device)
         self.actor_optimizer = torch.optim.Adam(self.actor.parameters(), lr=self.learning_rate)
 
-        self.critic = TD3_Critic(self.num_states, self.num_actions, use_gpu).to(self.device)
-        self.critic_target = TD3_Critic(self.num_states, self.num_actions, use_gpu).to(self.device)
+        self.critic = SAC_Critic(self.num_states, self.num_actions, use_gpu).to(self.device)
+        self.critic_target = SAC_Critic(self.num_states, self.num_actions, use_gpu).to(self.device)
         self.critic_target.load_state_dict(self.critic.state_dict())
         self.critic_optimizer = torch.optim.Adam(self.critic.parameters(), lr=self.learning_rate)
 
+        # Create Entropy network
+        self.entropy = SAC_Entropy(self.num_states, self.num_actions, use_gpu).to(self.device)
+        self.entropy_optimizer = torch.optim.Adam(self.entropy.parameters(), lr=self.learning_rate)
+
+        # Initialize alpha for entropy term (automatic tuning)
+        self.log_alpha = torch.tensor(np.log(self.alpha), requires_grad=True, device=self.device)
+        self.log_alpha_optimizer = torch.optim.Adam([self.log_alpha], lr=self.learning_rate)
+
         # Initialize replay memory
-        self.replay_buffer = ReplayBuffer(self.replay_buffer_size)
+        self.replay_buffer = ReplayBuffer(self.replay_memory_size)
         
-<<<<<<< HEAD
-        if self.is_training:
-=======
         if is_training or continue_training:
->>>>>>> testing
             # Initialize log file
             start_time = datetime.now()
             self.last_graph_update_time = start_time
@@ -155,67 +159,61 @@ class Agent():
 
     def select_action(self, state):
         state = torch.FloatTensor(state.reshape(1, -1)).to(self.device)
-        return self.actor(state).detach().cpu().numpy().flatten()
-    
-    def custom_clamp(self, action):
-        return torch.amx(torch.min(action, self.action_high, self.action_low))
-    
+        # at testing REMOVE STOCHASTICITY
+        action, log_prob = self.actor.sample(state)  # Use the sample method to get action and log probability
+        return action.detach().cpu().numpy().flatten(), log_prob
+
+
     def train(self):
+        # Sample a batch from the replay buffer
         states, actions, rewards, next_states, dones = self.replay_buffer.sample(self.batch_size)
 
-        state = torch.FloatTensor(states).to(self.device)
-        action = torch.FloatTensor(actions).to(self.device)
-        reward = torch.FloatTensor(rewards).unsqueeze(1).to(self.device)
-        next_state = torch.FloatTensor(next_states).to(self.device)
-        done = torch.FloatTensor(dones).unsqueeze(1).to(self.device)
+        # Convert to tensors
+        states = torch.FloatTensor(states).to(self.device)
+        actions = torch.FloatTensor(actions).to(self.device)
+        rewards = torch.FloatTensor(rewards).unsqueeze(1).to(self.device)
+        next_states = torch.FloatTensor(next_states).to(self.device)
+        dones = torch.FloatTensor(dones).unsqueeze(1).to(self.device)
 
+        # Update the critic networks
         with torch.no_grad():
-            noise = torch.FloatTensor(actions).data.normal_(0, self.policy_noise).clamp(-self.noise_clip, self.noise_clip).to(self.device)
-            next_action = (self.actor_target(next_state) + noise).clamp(-self.action_high, self.action_high)
-            # next_action = (self.actor_target(next_state) + noise)
-            # next_action = self.custom_clamp(next_action)
+            next_action, next_log_prob = self.actor.sample(next_states)
+            next_q1, next_q2 = self.critic_target(next_states, next_action)
+            next_v = torch.min(next_q1, next_q2) - self.alpha * next_log_prob
+            target_q = rewards + (1 - dones) * self.discount * next_v
 
-            target_Q1, target_Q2 = self.critic_target(next_state, next_action)
-            target_Q = torch.min(target_Q1, target_Q2)
-            target_Q = reward + (1 - done) * self.discount * target_Q
-
-        # Compute current Q estimates
-        current_Q1, current_Q2 = self.critic(state, action)
-
-        # Compute critic loss
-        critic_loss = F.mse_loss(current_Q1, target_Q) + F.mse_loss(current_Q2, target_Q)
-        
-        # Optimize the critic
+        q1, q2 = self.critic(states, actions)
+        critic_loss = nn.MSELoss()(q1, target_q) + nn.MSELoss()(q2, target_q)
         self.critic_optimizer.zero_grad()
         critic_loss.backward()
         self.critic_optimizer.step()
 
-        if self.total_it % self.policy_freq == 0:
+        # Update the actor network
+        action, log_prob = self.actor.sample(states)
+        q1, q2 = self.critic(states, action)
+        actor_loss = (self.alpha * log_prob - torch.min(q1, q2)).mean()
+        self.actor_optimizer.zero_grad()
+        actor_loss.backward()
+        self.actor_optimizer.step()
 
-            actor_loss = -self.critic.Q1(state, self.actor(state)).mean()
+        # Update the entropy coefficient network (alpha)
+        alpha_loss = -(self.log_alpha * (log_prob + self.target_entropy).detach()).mean()
+        self.log_alpha_optimizer.zero_grad()
+        alpha_loss.backward()
+        self.log_alpha_optimizer.step()
+        self.alpha = self.log_alpha.exp().item()
 
-            self.actor_optimizer.zero_grad()
-            actor_loss.backward()
-            self.actor_optimizer.step()
+        # Soft update the target networks
+        for param, target_param in zip(self.critic.parameters(), self.critic_target.parameters()):
+            target_param.data.copy_(self.tau * param.data + (1 - self.tau) * target_param.data)
 
-            with torch.no_grad():
-                for param, target_param in zip(self.critic.parameters(), self.critic_target.parameters()):
-                    target_param.data.copy_(self.tau * param.data + (1 - self.tau) * target_param.data)
-
-                for param, target_param in zip(self.actor.parameters(), self.actor_target.parameters()):
-                    target_param.data.copy_(self.tau * param.data + (1 - self.tau) * target_param.data)
-
+        # Increment iteration counter
         self.total_it += 1
 
-<<<<<<< HEAD
-    def run(self):
-=======
     def run(self, is_training=True, continue_training=False):
 
->>>>>>> testing
-
-        # best_reward = float(-np.inf)   # Used to track best reward
-        best_reward = None
+        best_reward = None # Used to track best reward
+        best_average_reward = None
 
         for episode in self.max_episodes:
 
@@ -225,30 +223,17 @@ class Agent():
             episode_reward = 0.0    # Used to accumulate rewards per episode
             step_count = 0          # Used for syncing policy => target network
 
-<<<<<<< HEAD
-            if not self.is_training:
-=======
             if not is_training or continue_training:
->>>>>>> testing
                 self.load()
 
             while(not terminated and not truncated and not step_count == self.max_timestep):
-                action = self.select_action(state)
-<<<<<<< HEAD
-                if self.is_training:
-=======
-                if is_training or continue_training:
->>>>>>> testing
-                    noise = np.random.normal(0, self.action_high * self.policy_noise, size=self.action_dim)
-                    action = (action + noise).clip(-self.action_high, self.action_high)
+               # Action selection
+                action, _ = self.select_action(state)  # Sample action from the actor
+
                 next_state, reward, terminated, truncated, _ = self.env.step(action)
                 terminated = step_count == self.max_timestep - 1 or terminated
 
-<<<<<<< HEAD
-                if self.is_training:
-=======
                 if is_training or continue_training:
->>>>>>> testing
                     self.replay_buffer.add(state, action, reward, next_state, terminated)
 
                     if self.replay_buffer.size() > self.batch_size and step_count % self.policy_freq == 0:
@@ -258,29 +243,34 @@ class Agent():
                 state = next_state
                 episode_reward += reward
                 step_count += 1
-
+                
             # Keep track of the rewards collected per episode and save model
             self.rewards_per_episode.append(episode_reward)
 
-<<<<<<< HEAD
-            if self.is_training:
-=======
             if is_training or continue_training:
->>>>>>> testing
                 current_time = datetime.now()
                 if current_time - self.last_graph_update_time > timedelta(seconds=10):
                     self.save_graph(self.rewards_per_episode)
                     self.last_graph_update_time = current_time
 
                 if (episode + 1) % 100 == 0:
-                    #Save model
-                    self.save()
-                    time_now = datetime.now()
                     average_reward = np.mean(self.rewards_per_episode[-100:])
-                    log_message = f"{time_now.strftime(self.DATE_FORMAT)}: Saving Model at Episode: {episode + 1} Average Reward: {average_reward:0.1f}"
+                    if best_average_reward == None:
+                        best_average_reward = average_reward
+    
+                    time_now = datetime.now()
+                    log_message = f"{time_now.strftime(self.DATE_FORMAT)}: Average Reward over last 100 episodes: {average_reward:0.1f} at episode: {episode + 1}"
                     print(log_message)
                     with open(self.LOG_FILE, 'a') as file:
                         file.write(log_message + '\n')
+                    if average_reward >= best_average_reward:
+                        best_average_reward = average_reward  # Update the best average reward
+                        # Save model
+                        self.save()
+                        log_message = f"{time_now.strftime(self.DATE_FORMAT)}: New Best Average Reward: {best_average_reward:0.1f} at episode: {episode + 1}, saving model..."
+                        print(log_message)
+                        with open(self.LOG_FILE, 'a') as file:
+                            file.write(log_message + '\n')
 
                 if best_reward == None:
                     best_reward = episode_reward
@@ -292,6 +282,12 @@ class Agent():
             else:
                 log_message = f"{datetime.now().strftime(self.DATE_FORMAT)}: This Episode Reward: {episode_reward:0.1f}"
                 print(log_message)
+            # decay entropy target
+            self.target_entropies.append(self.target_entropy)
+
+            if self.target_entropy <= -self.minimum_entropy:
+                self.target_entropy = self.target_entropy * self.entropy_decay
+                #print(f'target_entropy: {self.target_entropy}')
 
     # There is no functional difference between . pt and . pth when saving PyTorch models
     def save(self):
@@ -302,16 +298,15 @@ class Agent():
 
     def load(self):
         self.actor.load_state_dict(torch.load(f"{self.RUNS_DIR}/{self.INPUT_FILENAME}_actor.pth"))
-        self.actor_target.load_state_dict(self.actor.state_dict())
         self.critic.load_state_dict(torch.load(f"{self.RUNS_DIR}/{self.INPUT_FILENAME}_critic.pth"))
         self.critic_target.load_state_dict(self.critic.state_dict())
     
-        
-        
 
     def save_graph(self, rewards_per_episode):
         # Save plots
         fig, ax1 = plt.subplots()
+
+        plt.title(f'{self.env_id}')
 
         # Plot average rewards per last 100 episodes , and the cumulative mean over all episodes (Y-axis) vs episodes (X-axis)
         mean_rewards = np.zeros(len(rewards_per_episode))
@@ -333,14 +328,46 @@ class Agent():
         ax2.plot(mean_total, color='tab:green', linestyle='--')
         ax2.tick_params(axis='y', labelcolor='tab:green')
 
-        # Make y axis 1 and 2 the same scale
+        # Plot the target entropy on the same graph
+        ax3 = ax1.twinx()  # Create a third y-axis
+        ax3.set_ylabel('Target Entropy', color='tab:red')
+        ax3.plot(self.target_entropies, color='tab:red', linestyle='-.', alpha=0.7)
+        ax3.tick_params(axis='y', labelcolor='tab:red')
+        ax3.spines['right'].set_position(('outward', 60))  # Offset the third axis to the right
+        
+        # Set the same scale for all y-axes
         ax1.set_ylim([min(min(mean_rewards), min(mean_total)), max(max(mean_rewards), max(mean_total))])
         ax2.set_ylim(ax1.get_ylim())
+        ax3.set_ylim(min(self.target_entropies), max(self.target_entropies))  # Adjust scale for entropy
+
+        # Adjust layout to create more space for the text box
+        fig.tight_layout(rect=[0, 0.26, 1, 1])  # Adjust rect to leave more space at the bottom
+
+        # Add text box below the graph
+        text = (
+            f'env_id: {self.env_id}\n'
+            f'input_model_name: {self.input_model_name}    '
+            f'output_model_name: {self.output_model_name}\n'
+            f'replay_memory_size: {self.replay_memory_size}    '
+            f'mini_batch_size: {self.batch_size}    '
+            f'discount: {self.discount}\n'
+            f'tau: {self.tau}    '
+            f'learning_rate: {self.learning_rate}    '
+            f'policy_noise: {self.policy_noise}\n'
+            f'noise_clip: {self.noise_clip}    '
+            f'policy_freq: {self.policy_freq}    '
+            f'entropy_coefficient: {self.entropy_coefficient}\n'
+            f'minimum_entropy: {self.minimum_entropy}    '
+            f'entropy_decay: {self.entropy_decay}\n'
+        )
+
+        fig.text(0.5, 0.02, text, ha='center', fontsize=10, bbox=dict(facecolor='lightgrey', alpha=0.5))
 
         # Save the figure
-        fig.tight_layout()  # Adjust layout to prevent overlap
         fig.savefig(self.GRAPH_FILE)
         plt.close(fig)
+
+
 
 if __name__ == '__main__':
     # Parse command line inputs
@@ -353,9 +380,5 @@ if __name__ == '__main__':
     parser.add_argument('--endless', help='Endless mode', action='store_true')
     args = parser.parse_args()
 
-    TD3 = Agent(args.train, args.endless, args.continue_training, args.render, args.use_gpu, hyperparameter_set=args.hyperparameters)
-<<<<<<< HEAD
-    TD3.run()
-=======
-    TD3.run(args.train, args.continue_training)
->>>>>>> testing
+    SAC = Agent(args.train, args.endless, args.continue_training, args.render, args.use_gpu, hyperparameter_set=args.hyperparameters)
+    SAC.run(args.train, args.continue_training)
