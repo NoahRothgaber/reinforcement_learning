@@ -8,8 +8,8 @@ from datetime import datetime
 import yaml
 import torch
 from torch import nn, optim
-from torch.distributions.categorical import Categorical
 import gymnasium as gym
+from networks import ActorNetwork, CriticNetwork
 
 # For printing date and time
 DATE_FORMAT = "%m-%d %H:%M:%S"
@@ -66,58 +66,6 @@ class PPOMemory:
         self.values = []
 
 
-class ActorNetwork(nn.Module):
-    def __init__(self, n_actions, state_dim, alpha, hidden_dims_1=256, hidden_dims_2=256):
-        super(ActorNetwork, self).__init__()
-        self.checkpoint_file = os.path.join(RUNS_DIR, 'actor_torch_ppo')
-        self.actor = nn.Sequential(
-            nn.Linear(state_dim, hidden_dims_1),
-            nn.ReLU(),
-            nn.Linear(hidden_dims_1, hidden_dims_2),
-            nn.ReLU(),
-            nn.Linear(hidden_dims_2, n_actions),
-            nn.Softmax(dim=-1)
-        )
-        self.optimizer = optim.Adam(self.parameters(), lr=alpha)
-        self.device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
-        self.to(self.device)
-
-    def forward(self, state):
-        dist = self.actor(state)
-        return Categorical(dist)
-
-    def save_checkpoint(self):
-        torch.save(self.state_dict(), self.checkpoint_file)
-
-    def load_checkpoint(self):
-        self.load_state_dict(torch.load(self.checkpoint_file))
-
-
-class CriticNetwork(nn.Module):
-    def __init__(self, state_dim, alpha, hidden_dims_1=256, hidden_dims_2=256):
-        super(CriticNetwork, self).__init__()
-        self.checkpoint_file = os.path.join(RUNS_DIR, 'critic_torch_ppo')
-        self.critic = nn.Sequential(
-            nn.Linear(state_dim, hidden_dims_1),
-            nn.ReLU(),
-            nn.Linear(hidden_dims_1, hidden_dims_2),
-            nn.ReLU(),
-            nn.Linear(hidden_dims_2, 1)
-        )
-        self.optimizer = optim.Adam(self.parameters(), lr=alpha)
-        self.device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
-        self.to(self.device)
-
-    def forward(self, state):
-        return self.critic(state)
-
-    def save_checkpoint(self):
-        torch.save(self.state_dict(), self.checkpoint_file)
-
-    def load_checkpoint(self):
-        self.load_state_dict(torch.load(self.checkpoint_file))
-
-
 class PPO_Agent:
     def __init__(self, train, endless, continue_training, render, use_gpu, hyperparameter_set):
         with open('hyperparameters.yml', 'r') as file:
@@ -165,7 +113,7 @@ class PPO_Agent:
         torch.save(self.critic.state_dict(), f"{self.MODEL_FILE}_critic")
 
     def choose_action(self, observation):
-        state = torch.tensor([observation], dtype=torch.float32).to(self.actor.device)
+        state = torch.tensor(observation, dtype=torch.float32).to(self.actor.device)  # Fix: remove list wrapping
 
         dist = self.actor(state)
         value = self.critic(state)
@@ -284,7 +232,7 @@ class PPO_Agent:
 
                 if is_training:
                     # Ensure values are moved to CPU and then converted to numpy arrays if needed
-                    self.remember(state, action, log_prob, value, reward, terminated)
+                    self.remember(state, action, log_prob, value, torch.tensor(reward, dtype=torch.float32), terminated)
                     n_steps += 1
                     if n_steps % N == 0:
                         self.learn()
@@ -304,8 +252,6 @@ class PPO_Agent:
                 with open(self.LOG_FILE, 'a') as file:
                     file.write(log_message + '\n')
 
-            while not terminated and not truncated:
-                action, log_prob, value = self.choose
             if is_training and episode % 25 == 0:
                 self.save_graph(self.rewards_per_episode)
 
