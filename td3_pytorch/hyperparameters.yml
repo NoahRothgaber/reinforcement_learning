@@ -27,8 +27,8 @@ bipedal1:
 # every 2 timesteps
 bipedal2:
   env_id: BipedalWalker-v3
-  input_model_name:
-  output_model_name:
+  input_model_name: bipedal2
+  output_model_name: bipedal3
   render: False
   state_dim: 24
   action_dim: 4
@@ -48,7 +48,7 @@ bipedal2:
   max_timestep: 1600
   max_episodes: 3000
   env_make_params:
-    hardcore: False
+    hardcore: True
 
 # every timestep
 bipedal3:

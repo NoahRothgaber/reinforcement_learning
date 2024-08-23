@@ -1,0 +1,116 @@
+bipedal1:
+  env_id: BipedalWalker-v3
+  input_model_name: bipedal3
+  output_model_name: bipedal5
+  render: False
+  state_dim: 24
+  action_dim: 4
+  action_low: -1
+  action_high: 1
+  replay_memory_size: 100000
+  batch_size: 128
+  discount: 0.99
+  tau: 0.005
+  learning_rate: 0.0003
+  policy_noise: 0.2
+  noise_clip: 0.5
+  policy_freq: 1
+  model_save_freq: 100
+  total_it: 0
+  max_reward: 300
+  max_timestep: 1600
+  max_episodes: 3000
+  alpha: 0.2
+  entropy_coefficient: 3
+  minimum_entropy: 0.05
+  entropy_decay: 0.9995
+  env_make_params:
+    hardcore: False
+
+bipedal2:
+  env_id: BipedalWalker-v3
+  input_model_name: bipedal3
+  output_model_name: bipedal4
+  render: False
+  state_dim: 24
+  action_dim: 4
+  action_low: -1
+  action_high: 1
+  replay_memory_size: 100000
+  batch_size: 128
+  discount: 0.99
+  tau: 0.005
+  learning_rate: 0.0003
+  policy_noise: 0.2
+  noise_clip: 0.5
+  policy_freq: 2
+  model_save_freq: 100
+  total_it: 0
+  max_reward: 300
+  max_timestep: 1600
+  max_episodes: 3000
+  alpha: 0.2
+  entropy_coefficient: 3
+  minimum_entropy: 0.05
+  entropy_decay: 0.9995
+  env_make_params:
+    hardcore: False
+
+
+pendulum1:
+  env_id: Pendulum-v1
+  input_model_name: pendulum20
+  output_model_name: pendulum20
+  render: False
+  state_dim: 3
+  action_dim: 1
+  action_low: -2
+  action_high: 2
+  replay_memory_size: 100000
+  batch_size: 100
+  discount: 0.99
+  tau: 0.005
+  learning_rate: 0.0003
+  policy_noise: 0.2
+  noise_clip: 0.5
+  policy_freq: 2
+  model_save_freq: 100
+  total_it: 0
+  max_reward: 0
+  max_timestep: 200
+  max_episodes: 3000
+  alpha: 0.2
+  entropy_coefficient: 0.5
+  minimum_entropy: 0.001
+  entropy_decay: 0.9995
+  env_make_params:
+    g: 9.8
+
+pendulum2:
+  env_id: Pendulum-v1
+  input_model_name: 
+  output_model_name: pendulum1
+  render: False
+  state_dim: 3
+  action_dim: 1
+  action_low: -2
+  action_high: 2
+  replay_memory_size: 100000
+  batch_size: 100
+  discount: 0.99
+  tau: 0.005
+  learning_rate: 0.0003
+  policy_noise: 0.2
+  noise_clip: 0.5
+  policy_freq: 2
+  model_save_freq: 100
+  total_it: 0
+  max_reward: 0
+  max_timestep: 200
+  max_episodes: 3000
+  alpha: 0.2
+  entropy_coefficient: 10
+  minimum_entropy: 0.05
+  entropy_decay: 0.9998
+  env_make_params:
+    g: 9.8
