@@ -1,0 +1,238 @@
+# every timestep
+bipedal1:
+  env_id: BipedalWalker-v3
+  input_model_name:
+  output_model_name:
+  render: False
+  state_dim: 24
+  action_dim: 4
+  action_low: -1
+  action_high: 1
+  replay_memory_size: 100000
+  mini_batch_size: 128
+  discount: 0.99
+  tau: 0.005
+  learning_rate: 0.0003
+  policy_noise: 0.2
+  noise_clip: 0.5
+  policy_freq: 1
+  model_save_freq: 100
+  total_it: 0
+  max_reward: 300
+  max_timestep: 1600
+  max_episodes: 3000
+  env_make_params:
+    hardcore: False
+
+# every 2 timesteps
+bipedal2:
+  env_id: BipedalWalker-v3
+  input_model_name: bipedal2
+  output_model_name: bipedal3
+  render: False
+  state_dim: 24
+  action_dim: 4
+  action_low: -1
+  action_high: 1
+  replay_memory_size: 100000
+  mini_batch_size: 128
+  discount: 0.99
+  tau: 0.005
+  learning_rate: 0.0003
+  policy_noise: 0.2
+  noise_clip: 0.5
+  policy_freq: 2
+  model_save_freq: 100
+  total_it: 0
+  max_reward: 300
+  max_timestep: 1600
+  max_episodes: 3000
+  env_make_params:
+    hardcore: True
+
+# every timestep
+bipedal3:
+  env_id: BipedalWalker-v3
+  input_model_name: bipedal3
+  output_model_name:
+  render: False
+  state_dim: 24
+  action_dim: 4
+  action_low: -1
+  action_high: 1
+  replay_memory_size: 100000
+  mini_batch_size: 128
+  discount: 0.99
+  tau: 0.005
+  learning_rate: 0.0003
+  policy_noise: 0.2
+  noise_clip: 0.5
+  policy_freq: 1
+  model_save_freq: 100
+  total_it: 0
+  max_reward: 300
+  max_timestep: 1600
+  max_episodes: 3000
+  env_make_params:
+    hardcore: False
+
+# every 2 timesteps
+bipedal4:
+  env_id: BipedalWalker-v3
+  input_model_name: bipedal4
+  output_model_name: 
+  render: False
+  state_dim: 24
+  action_dim: 4
+  action_low: -1
+  action_high: 1
+  replay_memory_size: 100000
+  mini_batch_size: 128
+  discount: 0.99
+  tau: 0.005
+  learning_rate: 0.0003
+  policy_noise: 0.2
+  noise_clip: 0.5
+  policy_freq: 2
+  model_save_freq: 100
+  total_it: 0
+  max_reward: 300
+  max_timestep: 1600
+  max_episodes: 3000
+  env_make_params:
+    hardcore: False
+
+# every 2 timesteps
+# hardcore enabled
+bipedal5:
+  env_id: BipedalWalker-v3
+  input_model_name: bipedal3-5_hardcore
+  output_model_name: bipedal3_hardcore
+  render: False
+  state_dim: 24
+  action_dim: 4
+  action_low: -1
+  action_high: 1
+  replay_memory_size: 100000
+  mini_batch_size: 128
+  discount: 0.99
+  tau: 0.005
+  learning_rate: 0.0003
+  policy_noise: 0.2
+  noise_clip: 0.5
+  policy_freq: 2
+  model_save_freq: 100
+  total_it: 0
+  max_reward: 300
+  max_timestep: 2000
+  max_episodes: 3000
+  env_make_params:
+    hardcore: True
+
+# every 4 timesteps
+# hardcore enabled
+bipedal6:
+  env_id: BipedalWalker-v3
+  input_model_name:
+  output_model_name:
+  render: False
+  state_dim: 24
+  action_dim: 4
+  action_low: -1
+  action_high: 1
+  replay_memory_size: 100000
+  mini_batch_size: 128
+  discount: 0.99
+  tau: 0.005
+  learning_rate: 0.0003
+  policy_noise: 0.2
+  noise_clip: 0.5
+  policy_freq: 4
+  model_save_freq: 100
+  total_it: 0
+  max_reward: 300
+  max_timestep: 2000
+  max_episodes: 3000
+  env_make_params:
+    hardcore: True
+
+# every timestep
+# hardcore enabled
+bipedal7:
+  env_id: BipedalWalker-v3
+  input_model_name:
+  output_model_name:
+  render: False
+  state_dim: 24
+  action_dim: 4
+  action_low: -1
+  action_high: 1
+  replay_memory_size: 100000
+  mini_batch_size: 128
+  discount: 0.99
+  tau: 0.005
+  learning_rate: 0.0003
+  policy_noise: 0.2
+  noise_clip: 0.5
+  policy_freq: 1
+  model_save_freq: 100
+  total_it: 0
+  max_reward: 300
+  max_timestep: 2000
+  max_episodes: 3000
+  env_make_params:
+    hardcore: False
+
+# every 2 timesteps
+pendulum1:
+  env_id: Pendulum-v1
+  input_model_name:
+  output_model_name:
+  render: False
+  state_dim: 3
+  action_dim: 1
+  action_low: -2
+  action_high: 2
+  replay_memory_size: 100000
+  mini_batch_size: 100
+  discount: 0.99
+  tau: 0.005
+  learning_rate: 0.0003
+  policy_noise: 0.2
+  noise_clip: 0.5
+  policy_freq: 2
+  model_save_freq: 100
+  total_it: 0
+  noise_scale: 0.3
+  max_reward: 0
+  max_timestep: 200
+  max_episodes: 3000
+  env_make_params:
+    g: 5
+
+# every 2 timesteps
+# lower learning rate
+pendulum2:
+  env_id: Pendulum-v1
+  input_model_name:
+  output_model_name:
+  render: False
+  state_dim: 3
+  action_dim: 1
+  action_low: -2
+  action_high: 2
+  replay_memory_size: 1000000
+  mini_batch_size: 256
+  discount: 0.99
+  tau: 0.005
+  learning_rate: 0.0001
+  policy_noise: 0.2
+  noise_clip: 0.5
+  policy_freq: 2
+  model_save_freq: 100
+  total_it: 0
+  max_reward: 0
+  max_timestep: 200
+  max_episodes: 3000
+  env_make_params:
+    g: 9.8
