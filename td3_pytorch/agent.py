@@ -127,11 +127,7 @@ class Agent():
         # Initialize replay memory
         self.replay_buffer = ReplayBuffer(self.replay_buffer_size)
         
-<<<<<<< HEAD
-        if self.is_training:
-=======
         if is_training or continue_training:
->>>>>>> testing
             # Initialize log file
             start_time = datetime.now()
             self.last_graph_update_time = start_time
@@ -207,12 +203,8 @@ class Agent():
 
         self.total_it += 1
 
-<<<<<<< HEAD
-    def run(self):
-=======
     def run(self, is_training=True, continue_training=False):
 
->>>>>>> testing
 
         # best_reward = float(-np.inf)   # Used to track best reward
         best_reward = None
@@ -225,30 +217,18 @@ class Agent():
             episode_reward = 0.0    # Used to accumulate rewards per episode
             step_count = 0          # Used for syncing policy => target network
 
-<<<<<<< HEAD
-            if not self.is_training:
-=======
             if not is_training or continue_training:
->>>>>>> testing
                 self.load()
 
             while(not terminated and not truncated and not step_count == self.max_timestep):
                 action = self.select_action(state)
-<<<<<<< HEAD
-                if self.is_training:
-=======
                 if is_training or continue_training:
->>>>>>> testing
                     noise = np.random.normal(0, self.action_high * self.policy_noise, size=self.action_dim)
                     action = (action + noise).clip(-self.action_high, self.action_high)
                 next_state, reward, terminated, truncated, _ = self.env.step(action)
                 terminated = step_count == self.max_timestep - 1 or terminated
 
-<<<<<<< HEAD
-                if self.is_training:
-=======
                 if is_training or continue_training:
->>>>>>> testing
                     self.replay_buffer.add(state, action, reward, next_state, terminated)
 
                     if self.replay_buffer.size() > self.batch_size and step_count % self.policy_freq == 0:
@@ -262,11 +242,7 @@ class Agent():
             # Keep track of the rewards collected per episode and save model
             self.rewards_per_episode.append(episode_reward)
 
-<<<<<<< HEAD
-            if self.is_training:
-=======
             if is_training or continue_training:
->>>>>>> testing
                 current_time = datetime.now()
                 if current_time - self.last_graph_update_time > timedelta(seconds=10):
                     self.save_graph(self.rewards_per_episode)
@@ -354,8 +330,4 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     TD3 = Agent(args.train, args.endless, args.continue_training, args.render, args.use_gpu, hyperparameter_set=args.hyperparameters)
-<<<<<<< HEAD
-    TD3.run()
-=======
     TD3.run(args.train, args.continue_training)
->>>>>>> testing
