@@ -20,6 +20,8 @@ import torch.multiprocessing as mp
 
 from a3c import A3CActorCritic
 
+import flappy_bird_gymnasium
+
 # 'Agg': used to generate plots as images and save them to a file instead of rendering to screen
 matplotlib.use('Agg')
 
@@ -41,8 +43,8 @@ class SharedOptimizer(torch.optim.Adam):
                 
 class WorkerAgent(mp.Process):
 
-    def __init__(self, name, env_id, env_make_params, gamma, tau, learning_rate, max_reward, max_timestep,
-                  replay_buffer_size, hidden_dims, global_actor_critic, global_episode_index, optimizer):
+    def __init__(self, name, env_id, env_make_params, gamma, tau, learning_rate, max_reward, max_timestep, max_episodes,
+                  replay_buffer_size, hidden_dims, global_actor_critic, global_episode_index, rewards_per_episode, optimizer):
         super(WorkerAgent, self).__init__()
 
         # Initizalize parameters
@@ -53,14 +55,16 @@ class WorkerAgent(mp.Process):
         self.learning_rate = learning_rate
         self.max_reward = max_reward
         self.max_timestep = max_timestep
+        self.max_episodes = max_episodes
         self.replay_buffer_size = replay_buffer_size
         self.hidden_dims = hidden_dims
         self.global_actor_critic = global_actor_critic
         self.global_episode_index = global_episode_index
+        self.rewards_per_episode = rewards_per_episode
         self.optimizer = optimizer
         self.env_make_params = env_make_params
 
-        
+
     
         # Create instance of the environment.
         self.env = gym.make(self.env_id, render_mode=None, **self.env_make_params)
@@ -112,7 +116,16 @@ class WorkerAgent(mp.Process):
 
             with self.global_episode_index.get_lock():
                 self.global_episode_index.value += 1
-            print(self.name, 'episode ', self.global_episode_index.value, 'reward %.1f' % episode_reward)       
+
+            with self.rewards_per_episode.get_lock():
+                self.rewards_per_episode[self.global_episode_index.value] = episode_reward
+
+            print(self.name, 'episode ', self.global_episode_index.value, 'reward %.1f' % episode_reward)
+
+             # Check if global episode count exceeds max_episodes
+            if self.global_episode_index.value >= self.max_episodes:
+                print(f"{self.name} stopping: global episode count reached max_episodes {self.max_episodes}.")
+                break  
 
     def train(self, terminated):
         # Calculate the Actor Critic loss
@@ -160,7 +173,10 @@ class GlobalAgent():
         self.max_episodes           = hyperparameters['max_episodes']
         self.hidden_dims           = hyperparameters['hidden_dims']
         self.env_make_params        = hyperparameters.get('env_make_params',{})     # Get optional environment-specific parameters, default to empty dict
+        
+        # Global variable that can be modified across threads
         self.global_episode_index = mp.Value('i', 0) # global episode tracker
+        self.rewards_per_episode = mp.Array('d', self.max_episodes, lock=True)  # 'd' is for double precision float
 
         if self.input_model_name == None:
             self.input_model_name = hyperparameter_set
@@ -179,17 +195,16 @@ class GlobalAgent():
         self.device = 'cpu'
 
         # set endless mode if endless arg is true, otherwise set max episodes based on parameters 
-        if endless or not self.is_training:
-            self.max_episodes = itertools.count()
-        else:
-            self.max_episodes = range(self.max_episodes)
+        # if endless or not self.is_training:
+        #     self.max_episodes = itertools.count()
+        # else:
+        #     self.max_episodes = range(self.max_episodes)
 
         if self.continue_training:
             self.is_training = True
 
 
-        # List to keep track of rewards collected per episode.
-        self.rewards_per_episode = []
+    
 
         self.step_count = 0
 
@@ -199,6 +214,8 @@ class GlobalAgent():
         # GLOBAL AGENT INIT
     
         self.workers = []
+
+
 
         # Create instance of the environment.
         self.env = gym.make(self.env_id, render_mode='human' if render else None, **self.env_make_params)
@@ -240,9 +257,11 @@ class GlobalAgent():
             # then need to create environment and loop through testing episode 
             # make a function for this
         
-    def run(self, is_training=True, continue_training=False):
+    def run(self):
 
         self.initialize_workers()
+        self.save_graph()
+        print("Max Episodes Reached!")
         
 
 
@@ -272,37 +291,25 @@ class GlobalAgent():
             print(f"Starting Training...")
     
         
-    def save_graph(self, rewards_per_episode):
-        # Save plots
-        fig, ax1 = plt.subplots()
-
-        # Plot average rewards per last 100 episodes , and the cumulative mean over all episodes (Y-axis) vs episodes (X-axis)
-        mean_rewards = np.zeros(len(rewards_per_episode))
-        for x in range(len(mean_rewards)):
-            mean_rewards[x] = np.mean(rewards_per_episode[max(0, x-99):(x+1)])
-
-        mean_total = np.zeros(len(rewards_per_episode))
-        for x in range(len(mean_total)):
-            mean_total[x] = np.mean(rewards_per_episode[0:(x+1)])
+    def save_graph(self):
+        # Convert shared array to list
+        rewards = list(self.rewards_per_episode)
         
-        ax1.set_xlabel('Episodes')
-        ax1.set_ylabel('Mean Reward Last 100 Episodes', color='tab:blue')
-        ax1.plot(mean_rewards, color='tab:blue')
-        ax1.tick_params(axis='y', labelcolor='tab:blue')
+        fig, ax = plt.subplots()
 
-        # Create a second y-axis
-        ax2 = ax1.twinx()
-        ax2.set_ylabel('Cumulative Mean Reward', color='tab:green')
-        ax2.plot(mean_total, color='tab:green', linestyle='--')
-        ax2.tick_params(axis='y', labelcolor='tab:green')
+        # Plot the rewards
+        ax.plot(rewards, label='Reward per Episode')
+        
+        # Optionally, calculate and plot the moving average
+        moving_avg = np.convolve(rewards, np.ones(100)/100, mode='valid')
+        ax.plot(range(len(moving_avg)), moving_avg, label='100-episode Moving Avg', color='orange')
 
-        # Make y axis 1 and 2 the same scale
-        ax1.set_ylim([min(min(mean_rewards), min(mean_total)), max(max(mean_rewards), max(mean_total))])
-        ax2.set_ylim(ax1.get_ylim())
+        ax.set_xlabel('Episode')
+        ax.set_ylabel('Reward')
+        ax.set_title('Episode Rewards')
+        ax.legend()
 
-        # Save the figure
-        fig.tight_layout()  # Adjust layout to prevent overlap
-        fig.savefig(self.GRAPH_FILE)
+        plt.savefig(self.GRAPH_FILE)
         plt.close(fig)
 
 
@@ -310,8 +317,8 @@ class GlobalAgent():
         for i in range(mp.cpu_count()):
             worker_name = f'Worker {i}'
             temp_worker = WorkerAgent(name=worker_name, env_id=self.env_id, gamma=self.gamma, tau=self.tau, learning_rate=self.learning_rate, 
-                                      max_timestep=self.max_timestep, replay_buffer_size=self.replay_buffer_size, 
-                                      global_actor_critic=self.global_actor_critic, global_episode_index=self.global_episode_index, optimizer=self.optimizer,
+                                      max_timestep=self.max_timestep, max_episodes=self.max_episodes, replay_buffer_size=self.replay_buffer_size, 
+                                      global_actor_critic=self.global_actor_critic, global_episode_index=self.global_episode_index, rewards_per_episode=self.rewards_per_episode, optimizer=self.optimizer,
                                       max_reward=self.max_reward, hidden_dims=self.hidden_dims, env_make_params= self.env_make_params)
             self.workers.append(temp_worker)
         [w.start() for w in self.workers]
