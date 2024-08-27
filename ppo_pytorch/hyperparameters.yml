@@ -1,3 +1,4 @@
+# ppo hyperparameters
 cartpole1:
   env_id: CartPole-v1
   replay_memory_size: 10000

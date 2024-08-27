@@ -51,6 +51,8 @@ class WorkerAgent(mp.Process):
         self.global_actor_critic = global_actor_critic
         self.global_episode_index = global_episode_index
         self.optimizer = optimizer
+
+        
         
 
         # Create instance of the environment.
@@ -62,6 +64,7 @@ class WorkerAgent(mp.Process):
 
         # Initialize the Local Actor Critic Network
         self.local_actor_critic = A3CActorCritic(self.num_states, self.num_actions, self.gamma, self.replay_buffer_size, self.hidden_dims)
+        self.global_actor_critic = global_actor_critic
 
 
     def run(self):
@@ -83,29 +86,48 @@ class WorkerAgent(mp.Process):
             self.entropy_term = 0
 
             while(not terminated and not truncated and not self.step_count == self.max_timestep):
-                # 
                     action = self.local_actor_critic.choose_action(state)
                     
                     next_state, reward, terminated, truncated, _ = self.env.step(action)
 
                     episode_reward+= reward
 
-                    self.local_actor_critic.memory.add(state, action, reward, truncated)
-
-                    state = next_state
+                    terminated = self.step_count == self.max_timestep - 1 or terminated or truncated
                     
-                    # if the episode has finsihed (by termination or max trime steps)
-                    if step_count % max_timesteps:
-                        pass
+                    self.local_actor_critic.memory.add(state, action, reward, terminated)
 
+                    self.step_count += 1
+                    state = next_state
+            # Train after each episode        
+            self.train(terminated)     
 
-       
+            with self.episode_idx.get_lock():
+                self.global_episode_index  += 1
+            print(self.name, 'episode ', self.episode_idx.value, 'reward %.1f' % episode_reward)       
+
+    def train(self, terminated):
+        # Calculate the Actor Critic loss
+        loss = self.local_actor_critic.calc_loss(terminated) 
+        self.optimizer.zero_grad()
+        loss.backward()
+
+        # takes gradients from local agent and throws them over to global agent
+        for local_param, global_param in zip(
+            self.local_actor_critic.parameters(),
+            self.global_actor_critic.parameters()):
+                global_param._grad = local_param.grad
+        
+        self.optimizer.step()
+        # Update the weights from the Global Network to the Worker Network
+        self.local_actor_critic.load_state_dict(self.global_actor_critic.state_dict())
+
+        # Clears previous episode memory
+        self.local_actor_critic.memory.reset()
 
 
 
 # A3C Agent
 class GlobalAgent():
-
     def __init__(self, is_training, endless, continue_training, render, use_gpu, hyperparameter_set):
         with open(os.path.join(os.getcwd(), 'hyperparameters.yml'), 'r') as file:
             all_hyperparameter_sets = yaml.safe_load(file)
@@ -127,6 +149,7 @@ class GlobalAgent():
         self.max_reward             = hyperparameters['max_reward']
         self.max_timestep           = hyperparameters['max_timestep']
         self.max_episodes           = hyperparameters['max_episodes']
+        self.hidden_dims           = hyperparameters['hidden_dims']
         self.env_make_params        = hyperparameters.get('env_make_params',{})     # Get optional environment-specific parameters, default to empty dict
 
         if self.input_model_name == None:
@@ -157,14 +180,11 @@ class GlobalAgent():
 
         # List to keep track of rewards collected per episode.
         self.rewards_per_episode = []
-        self.total_it = 0
-        self.entropy_term = 0
 
         self.step_count = 0
 
         self.log_probs = []
         self.values = []
-
 
         # GLOBAL AGENT INIT
         self.global_actor_critic = A3CActorCritic(self.num_states, self.num_actions, self.gamma, self.replay_buffer_size, self.hidden_dims)
@@ -199,52 +219,8 @@ class GlobalAgent():
             start_time = datetime.now()
             log_message = f"{start_time.strftime(self.DATE_FORMAT)}: Run starting..."
             print(log_message)
-    
-    def train(self):
-       
-        states, actions, rewards, next_states, dones = self.replay_buffer.get_all()
-
-        states = torch.FloatTensor(states).to(self.device)
-        actions = torch.FloatTensor(actions).to(self.device)
-        rewards = torch.FloatTensor(rewards).unsqueeze(1).to(self.device)
-        next_states = torch.FloatTensor(next_states).to(self.device)
-        dones = torch.FloatTensor(dones).unsqueeze(1).to(self.device)
-
-        # retreive the last value in the next_state tensor 
-        new_state = next_states[-1]
-       
-          # Compute critic loss
-        Qval = self.critic(new_state)
-        Qval = Qval.detach().cpu().numpy()[0]
-
-        Qvals = np.zeros_like(self.values)
-        for t in reversed(range(len(rewards))):
-            Qval = rewards[t] + self.gamma * Qval
-            Qvals[t] = Qval
-
-        self.values = torch.FloatTensor(self.values).to(self.device)
-        Qvals = torch.FloatTensor(Qvals).to(self.device)
-        self.log_probs = torch.stack(self.log_probs).to(self.device)
-
-        advantage = Qvals - self.values
-        advantage.requires_grad = True
-
-        # Compute critic loss and update critic network
-        critic_loss = 0.5 * advantage.pow(2).mean()
-        self.critic_optimizer.zero_grad()
-        critic_loss.backward()
-        self.critic_optimizer.step()
-
-        # Compute actor loss and update actor network
-        actor_loss = (-self.log_probs * advantage).mean()
-        self.actor_optimizer.zero_grad()
-        actor_loss.backward()
-        self.actor_optimizer.step()
-
         
     def run(self, is_training=True, continue_training=False):
-
-
         # best_reward = float(-np.inf)   # Used to track best reward
         best_reward = None
 

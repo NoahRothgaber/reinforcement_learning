@@ -1,3 +1,4 @@
+# A3C Hyperparameters
 cartpole:
   env_id: CartPole-v1
   input_model_name: carptole1
@@ -11,3 +12,4 @@ cartpole:
   max_reward: 300
   max_timestep: 1600
   max_episodes: 3000
+  hidden_dims: 128

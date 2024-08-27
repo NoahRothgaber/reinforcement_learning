@@ -1,3 +1,4 @@
+# sac hyperparameters
 bipedal1:
   env_id: BipedalWalker-v3
   input_model_name: bipedal3

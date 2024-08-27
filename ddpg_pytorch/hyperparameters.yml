@@ -1,3 +1,4 @@
+#ddpg hyperparameters
 # every timestep
 bipedal1:
   env_id: BipedalWalker-v3

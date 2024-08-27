@@ -13,29 +13,29 @@ class ReplayBuffer():
     def __init__(self, max_size):
         self.buffer = deque(maxlen=max_size)
     
-    def add(self, state, action, reward, done):
-        self.buffer.append((state, action, reward, done))
+    def add(self, state, action, reward, terminated):
+        self.buffer.append((state, action, reward, terminated))
     
     def sample(self, batch_size):
         batch = random.sample(self.buffer, batch_size)
-        states, actions, rewards, dones = zip(*batch)
-        return np.array(states), np.array(actions), np.array(rewards), np.array(dones)
+        states, actions, rewards, terminateds = zip(*batch)
+        return np.array(states), np.array(actions), np.array(rewards), np.array(terminateds)
     
     def get_all(self):
         """Retrieve all data from the buffer."""
         if len(self.buffer) == 0:
             return np.array([]), np.array([]), np.array([]), np.array([])
         
-        states, actions, rewards, dones = zip(*self.buffer)
+        states, actions, rewards, terminateds = zip(*self.buffer)
         
          # Ensure that tensors are moved to CPU before converting to NumPy arrays
         states = [s.cpu().numpy() if isinstance(s, torch.Tensor) else s for s in states]
         actions = [a.cpu().numpy() if isinstance(a, torch.Tensor) else a for a in actions]
         rewards = [r.cpu().numpy() if isinstance(r, torch.Tensor) else r for r in rewards]
-        dones = [d.cpu().numpy() if isinstance(d, torch.Tensor) else d for d in dones]
+        terminateds = [d.cpu().numpy() if isinstance(d, torch.Tensor) else d for d in terminateds]
         
        
-        return np.array(states), np.array(actions), np.array(rewards), np.array(dones)
+        return np.array(states), np.array(actions), np.array(rewards), np.array(terminateds)
 
     def size(self):
         return len(self.buffer)
@@ -74,11 +74,11 @@ class A3CActorCritic(nn.module):
         value_one = self.value_one(value_two)
         return policy_one, value_one
     
-    def calc_R(self, done):
+    def calc_R(self, terminated):
         states = torch.tensor(self.states, dtype=torch.Float)
         _, v = self.forward(states)
 
-        R = v[-1] * (1 - int(done))
+        R = v[-1] * (1 - int(terminated))
 
         batch_return = []
 
@@ -90,11 +90,11 @@ class A3CActorCritic(nn.module):
 
         return batch_return
     
-    def calc_loss(self, done):
+    def calc_loss(self, terminated):
         states = torch.tensor(self.states, dtype=torch.float)
         actions = torch.tensor(self.actions, dtype=torch.float)
 
-        returns = self.calc_R(done)
+        returns = self.calc_R(terminated)
 
         policy, values = self.forward(states)
         values = values.squeeze()
