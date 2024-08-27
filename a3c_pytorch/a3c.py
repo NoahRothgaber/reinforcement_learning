@@ -44,14 +44,14 @@ class ReplayBuffer():
         self.buffer.clear()
 
         
-class A3CActorCritic(nn.module):
+class A3CActorCritic(nn.Module):
     def __init__(self, input_dims, n_actions, gamma, replay_buffer_size, hidden_layer1=128):
         super(A3CActorCritic, self).__init__()
 
         self.gamma = gamma
 
-        self.policy_two = nn.Linear(*input_dims, hidden_layer1)
-        self.value_two = nn.Linear(*input_dims, hidden_layer1)
+        self.policy_two = nn.Linear(input_dims, hidden_layer1)
+        self.value_two = nn.Linear(input_dims, hidden_layer1)
         self.policy_one = nn.Linear(hidden_layer1, n_actions)
         self.value_one = nn.Linear(hidden_layer1, 1)
 
@@ -75,24 +75,29 @@ class A3CActorCritic(nn.module):
         return policy_one, value_one
     
     def calc_R(self, terminated):
-        states = torch.tensor(self.states, dtype=torch.Float)
+        states, _, rewards, _= self.memory.get_all()
+
+        states = torch.tensor(states, dtype=torch.float)
         _, v = self.forward(states)
 
         R = v[-1] * (1 - int(terminated))
 
         batch_return = []
 
-        for reward in self.rewards[::-1]:
+        for reward in rewards[::-1]:
             R = reward + self.gamma * R
             batch_return.append(R)
         batch_return.reverse()
-        batch_return = torch.Tensor(batch_return, dtype=torch.float)
+        batch_return = torch.tensor(batch_return, dtype=torch.float)
 
         return batch_return
     
     def calc_loss(self, terminated):
-        states = torch.tensor(self.states, dtype=torch.float)
-        actions = torch.tensor(self.actions, dtype=torch.float)
+
+        states, actions, _, _= self.memory.get_all()
+
+        states = torch.tensor(states, dtype=torch.float)
+        actions = torch.tensor(actions, dtype=torch.float)
 
         returns = self.calc_R(terminated)
 
@@ -114,6 +119,6 @@ class A3CActorCritic(nn.module):
         policy, value = self.forward(state)
         probs = torch.softmax(policy, dim=1)
         dist = Categorical(probs)
-        action = dist.sample().numpy[0]
+        action = dist.sample().numpy()[0]
         
         return action
