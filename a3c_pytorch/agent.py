@@ -25,18 +25,25 @@ matplotlib.use('Agg')
 
 class SharedOptimizer(torch.optim.Adam):
     def __init__(self, params, learning_rate, betas, epsilon=1e-8, weight_decay=0):
-        super(SharedOptimizer, self).__init__(params,lr=learning_rate,betas=betas,weight_decay=weight_decay)
+        super(SharedOptimizer, self).__init__(params, lr=learning_rate, betas=betas, weight_decay=weight_decay)
 
         for group in self.param_groups:
             for p in group['params']:
                 state = self.state[p]
-                state['step'] = 0
+                # Change 'step' to be a tensor rather than an integer
+                state['step'] = torch.tensor(0, dtype=torch.int64).share_memory_()
                 state['exp_avg'] = torch.zeros_like(p.data)
+                state['exp_avg_sq'] = torch.zeros_like(p.data)
+                # Share the memory for exp_avg and exp_avg_sq to ensure compatibility in multiprocessing
+                state['exp_avg'].share_memory_()
                 state['exp_avg_sq'].share_memory_()
+
                 
 class WorkerAgent(mp.Process):
-    def __init__(self, name, env_id, gamma, tau, learning_rate, max_reward, max_timestep,
+
+    def __init__(self, name, env_id, env_make_params, gamma, tau, learning_rate, max_reward, max_timestep,
                   replay_buffer_size, hidden_dims, global_actor_critic, global_episode_index, optimizer):
+        super(WorkerAgent, self).__init__()
 
         # Initizalize parameters
         self.name = name
@@ -51,10 +58,10 @@ class WorkerAgent(mp.Process):
         self.global_actor_critic = global_actor_critic
         self.global_episode_index = global_episode_index
         self.optimizer = optimizer
+        self.env_make_params = env_make_params
 
         
-        
-
+    
         # Create instance of the environment.
         self.env = gym.make(self.env_id, render_mode=None, **self.env_make_params)
 
@@ -65,6 +72,7 @@ class WorkerAgent(mp.Process):
         # Initialize the Local Actor Critic Network
         self.local_actor_critic = A3CActorCritic(self.num_states, self.num_actions, self.gamma, self.replay_buffer_size, self.hidden_dims)
         self.global_actor_critic = global_actor_critic
+
 
 
     def run(self):
@@ -78,12 +86,13 @@ class WorkerAgent(mp.Process):
 
             episode_reward = 0.0    # Used to accumulate rewards per episode
 
-            self.replay_buffer.reset()  # clear all the data in the replay buffer at the start of each episode
+            self.local_actor_critic.memory.reset()  # clear all the data in the replay buffer at the start of each episode
 
             # reset some data
             self.values = []
             self.log_probs = []
             self.entropy_term = 0
+            self.step_count = 0
 
             while(not terminated and not truncated and not self.step_count == self.max_timestep):
                     action = self.local_actor_critic.choose_action(state)
@@ -101,9 +110,9 @@ class WorkerAgent(mp.Process):
             # Train after each episode        
             self.train(terminated)     
 
-            with self.episode_idx.get_lock():
-                self.global_episode_index  += 1
-            print(self.name, 'episode ', self.episode_idx.value, 'reward %.1f' % episode_reward)       
+            with self.global_episode_index.get_lock():
+                self.global_episode_index.value += 1
+            print(self.name, 'episode ', self.global_episode_index.value, 'reward %.1f' % episode_reward)       
 
     def train(self, terminated):
         # Calculate the Actor Critic loss
@@ -151,6 +160,7 @@ class GlobalAgent():
         self.max_episodes           = hyperparameters['max_episodes']
         self.hidden_dims           = hyperparameters['hidden_dims']
         self.env_make_params        = hyperparameters.get('env_make_params',{})     # Get optional environment-specific parameters, default to empty dict
+        self.global_episode_index = mp.Value('i', 0) # global episode tracker
 
         if self.input_model_name == None:
             self.input_model_name = hyperparameter_set
@@ -187,7 +197,7 @@ class GlobalAgent():
         self.values = []
 
         # GLOBAL AGENT INIT
-        self.global_actor_critic = A3CActorCritic(self.num_states, self.num_actions, self.gamma, self.replay_buffer_size, self.hidden_dims)
+    
         self.workers = []
 
         # Create instance of the environment.
@@ -196,6 +206,12 @@ class GlobalAgent():
         # Number of possible actions & observation space size
         self.num_actions = self.env.action_space.n
         self.num_states = self.env.observation_space.shape[0] # Expecting type: Box(low, high, (shape0,), float64)
+
+
+        self.global_actor_critic = A3CActorCritic(self.num_states, self.num_actions, self.gamma, self.replay_buffer_size, self.hidden_dims)
+        self.global_actor_critic.share_memory()
+        self.optimizer = SharedOptimizer(self.global_actor_critic.parameters(), learning_rate=self.learning_rate, betas=(0.92, 0.999))
+        
         self.env.close() # close the environment as we're just getting num_actions and states from it
         
         if is_training or continue_training:
@@ -211,6 +227,8 @@ class GlobalAgent():
             if continue_training:
                 self.load()
 
+            self.run()
+
         # if we are not training, generate the actor and critic policies based on the saved model
         else:
             self.load()
@@ -219,106 +237,41 @@ class GlobalAgent():
             start_time = datetime.now()
             log_message = f"{start_time.strftime(self.DATE_FORMAT)}: Run starting..."
             print(log_message)
+            # then need to create environment and loop through testing episode 
+            # make a function for this
         
     def run(self, is_training=True, continue_training=False):
-        # best_reward = float(-np.inf)   # Used to track best reward
-        best_reward = None
 
-        for episode in self.max_episodes:
-
-            state, _ = self.env.reset()  # Initialize environment. Reset returns (state,info).
-            terminated = False      # True when agent reaches goal or fails
-            truncated = False       # True when max_timestep is reached
-            episode_reward = 0.0    # Used to accumulate rewards per episode
-            self.step_count = 0          # Used for syncing policy => target network
-
-            self.replay_buffer.reset()  # clear all the data in the replay buffer at the start of each episode
-
-            # reset some data
-            self.values = []
-            self.log_probs = []
-            self.entropy_term = 0
+        self.initialize_workers()
+        
 
 
-            if not is_training or continue_training:
-                self.load()
-
-            while(not terminated and not truncated and not self.step_count == self.max_timestep):
-               
-                state = torch.FloatTensor(state).unsqueeze(0).to(self.device)  # Move state to the correct device
-
-                value = self.critic(state)
-                policy_dist = self.actor(state)
-
-                value = value.cpu().detach().numpy()[0,0]
-                dist = policy_dist.cpu().detach().numpy() 
-
-                action = np.random.choice(self.num_actions, p=np.squeeze(dist))
-                log_prob = torch.log(policy_dist.squeeze(0)[action])
-
-                entropy = -np.sum(np.mean(dist) * np.log(dist))
-
-                next_state, reward, terminated, truncated, _ = self.env.step(action)
-                terminated = self.step_count == self.max_timestep - 1 or terminated
-                self.step_count += 1
-
-                if is_training or continue_training:
-                    self.replay_buffer.add(state, action, reward, next_state, terminated)
-                    self.log_probs.append(log_prob)
-                    self.values.append(value)
-                    self.entropy_term += entropy
-
-                    if terminated: # train if the episode has ended
-                        # Train the agent
-                        self.train()
-
-                state = next_state
-                episode_reward += reward
-               
-
-            # Keep track of the rewards collected per episode and save model
-            self.rewards_per_episode.append(episode_reward)
-
-            if is_training or continue_training:
-                current_time = datetime.now()
-                if current_time - self.last_graph_update_time > timedelta(seconds=10):
-                    self.save_graph(self.rewards_per_episode)
-                    self.last_graph_update_time = current_time
-
-                if (episode + 1) % 100 == 0:
-                    #Save model
-                    self.save()
-                    time_now = datetime.now()
-                    average_reward = np.mean(self.rewards_per_episode[-100:])
-                    log_message = f"{time_now.strftime(self.DATE_FORMAT)}: Saving Model at Episode: {episode + 1} Average Reward: {average_reward:0.1f}"
-                    print(log_message)
-                    with open(self.LOG_FILE, 'a') as file:
-                        file.write(log_message + '\n')
-
-                if best_reward == None:
-                    best_reward = episode_reward
-
-                if episode_reward > best_reward and episode > 0:
-                    log_message = f"{datetime.now().strftime(self.DATE_FORMAT)}: New Best Reward: {episode_reward:0.1f} ({abs((episode_reward-best_reward)/best_reward)*100:+.1f}%) at episode {episode}"
-                    print(log_message)
-                    best_reward = episode_reward
-            else:
-                log_message = f"{datetime.now().strftime(self.DATE_FORMAT)}: This Episode Reward: {episode_reward:0.1f}"
-                print(log_message)
 
     # There is no functional difference between . pt and . pth when saving PyTorch models
     def save(self):
         if not os.path.exists(self.RUNS_DIR):
             os.makedirs(self.RUNS_DIR)
-        torch.save(self.actor.state_dict(), f"{self.RUNS_DIR}/{self.OUTPUT_FILENAME}_actor.pth")
-        torch.save(self.critic.state_dict(), f"{self.RUNS_DIR}/{self.OUTPUT_FILENAME}_critic.pth")
+        torch.save(self.global_actor_critic.state_dict(), f"{self.RUNS_DIR}/{self.OUTPUT_FILENAME}_global_actor_critic.pth")
 
     def load(self):
-        self.actor.load_state_dict(torch.load(f"{self.RUNS_DIR}/{self.INPUT_FILENAME}_actor.pth"))
-        self.critic.load_state_dict(torch.load(f"{self.RUNS_DIR}/{self.INPUT_FILENAME}_critic.pth"))
+        try:
+            self.global_actor_critic.load_state_dict(
+                torch.load(f"{self.RUNS_DIR}/{self.INPUT_FILENAME}_global_actor_critic.pth")
+            )
+            print("Model loaded successfully.")
+        except FileNotFoundError:
+            print("Model load failed. Switching to training mode.")
+            
+            # Create the "runs" directory if it doesn't exist
+            if not os.path.exists(self.RUNS_DIR):
+                os.makedirs(self.RUNS_DIR)
+                print(f"Created directory: {self.RUNS_DIR}")
+
+            # Switch to training mode
+            self.is_training = True
+            print(f"Starting Training...")
     
         
-    
     def save_graph(self, rewards_per_episode):
         # Save plots
         fig, ax1 = plt.subplots()
@@ -356,9 +309,13 @@ class GlobalAgent():
     def initialize_workers(self):
         for i in range(mp.cpu_count()):
             worker_name = f'Worker {i}'
-            temp_worker = WorkerAgent(worker_name, self.env_id, self.gamma, self.tau, self.learning_rate, 
-                                      self.max_episodes, self.max_timestep, self.replay_buffer_size)
+            temp_worker = WorkerAgent(name=worker_name, env_id=self.env_id, gamma=self.gamma, tau=self.tau, learning_rate=self.learning_rate, 
+                                      max_timestep=self.max_timestep, replay_buffer_size=self.replay_buffer_size, 
+                                      global_actor_critic=self.global_actor_critic, global_episode_index=self.global_episode_index, optimizer=self.optimizer,
+                                      max_reward=self.max_reward, hidden_dims=self.hidden_dims, env_make_params= self.env_make_params)
             self.workers.append(temp_worker)
+        [w.start() for w in self.workers]
+        [w.join() for w in self.workers] 
         
 
 if __name__ == '__main__':
@@ -378,15 +335,3 @@ if __name__ == '__main__':
     # create global agent
     globalAgent = GlobalAgent(args.train, args.endless, args.continue_training, args.render, args.use_gpu, hyperparameter_set=args.hyperparameters)
 
-    global_actor_critic.run(args.train, args.continue_training)
-
-
-    global_ep = mp.Value('i', 0) # global episode tracker
-
-    # create workers 
-
-    workers = [Agent(global_actor_critic,
-                    name=i,
-                    global_ep_idx=global_ep) for i in range(mp.cpu_count())]
-    [w.start() for w in workers]
-    [w.join() for w in workers] 
