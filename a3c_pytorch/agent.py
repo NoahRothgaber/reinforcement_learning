@@ -93,9 +93,6 @@ class WorkerAgent(mp.Process):
             self.local_actor_critic.memory.reset()  # clear all the data in the replay buffer at the start of each episode
 
             # reset some data
-            self.values = []
-            self.log_probs = []
-            self.entropy_term = 0
             self.step_count = 0
 
             while(not terminated and not truncated and not self.step_count == self.max_timestep):
@@ -174,7 +171,7 @@ class GlobalAgent():
         self.hidden_dims           = hyperparameters['hidden_dims']
         self.env_make_params        = hyperparameters.get('env_make_params',{})     # Get optional environment-specific parameters, default to empty dict
         
-        # Global variable that can be modified across threads
+        # Global variables that can be modified across threads
         self.global_episode_index = mp.Value('i', 0) # global episode tracker
         self.rewards_per_episode = mp.Array('d', self.max_episodes, lock=True)  # 'd' is for double precision float
 
@@ -203,35 +200,25 @@ class GlobalAgent():
         if self.continue_training:
             self.is_training = True
 
+        #self.step_count = 0
 
-    
-
-        self.step_count = 0
-
-        self.log_probs = []
-        self.values = []
-
-        # GLOBAL AGENT INIT
-    
         self.workers = []
-
-
 
         # Create instance of the environment.
         self.env = gym.make(self.env_id, render_mode='human' if render else None, **self.env_make_params)
 
         # Number of possible actions & observation space size
         self.num_actions = self.env.action_space.n
-        self.num_states = self.env.observation_space.shape[0] # Expecting type: Box(low, high, (shape0,), float64)
-
+        self.num_states = self.env.observation_space.shape[0]
 
         self.global_actor_critic = A3CActorCritic(self.num_states, self.num_actions, self.gamma, self.replay_buffer_size, self.hidden_dims)
         self.global_actor_critic.share_memory()
         self.optimizer = SharedOptimizer(self.global_actor_critic.parameters(), learning_rate=self.learning_rate, betas=(0.92, 0.999))
         
-        self.env.close() # close the environment as we're just getting num_actions and states from it
+        
         
         if is_training or continue_training:
+            self.env.close() # close the environment as we're just getting num_actions and states from it
             # Initialize log file
             start_time = datetime.now()
             self.last_graph_update_time = start_time
@@ -249,22 +236,48 @@ class GlobalAgent():
         # if we are not training, generate the actor and critic policies based on the saved model
         else:
             self.load()
-            self.actor.eval()
-            self.critic.eval()
+            self.global_actor_critic.eval()
             start_time = datetime.now()
             log_message = f"{start_time.strftime(self.DATE_FORMAT)}: Run starting..."
             print(log_message)
             # then need to create environment and loop through testing episode 
             # make a function for this
+            self.testing()
+            
         
     def run(self):
 
         self.initialize_workers()
         self.save_graph()
         print("Max Episodes Reached!")
+
+        # Save model
+        self.save()
         
+    def testing(self):
 
+        for episode in itertools.count():
+            # init stuff
+            state, _ = self.env.reset()  # Initialize environment. Reset returns (state,info)
+            
+            terminated = False      # True when agent reaches goal or fails
+            truncated = False       # True when max_timestep is reached
+            episode_reward = 0.0    # Used to accumulate rewards per episode
+            self.step_count = 0
 
+            while(not terminated and not truncated and not self.step_count == self.max_timestep):
+                    action = self.global_actor_critic.choose_action(state)
+                    
+                    next_state, reward, terminated, truncated, _ = self.env.step(action)
+                    episode_reward+= reward
+                    terminated = self.step_count == self.max_timestep - 1 or terminated or truncated
+                    
+                    self.step_count += 1
+                    state = next_state
+                    
+            log_message = f"{datetime.now().strftime(self.DATE_FORMAT)}: This Episode Reward: {episode_reward:0.1f}"
+            print(log_message)
+            
 
     # There is no functional difference between . pt and . pth when saving PyTorch models
     def save(self):
