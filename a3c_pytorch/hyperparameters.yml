@@ -1,8 +1,24 @@
 # A3C Hyperparameters
 cartpole:
   env_id: CartPole-v1
-  input_model_name: carptole1
-  output_model_name: cartpole1
+  input_model_name: cartpole4
+  output_model_name: cartpole4
+  replay_memory_size: 100000
+  mini_batch_size: 128
+  gamma: 0.99
+  tau: 0.005
+  learning_rate: 0.0003
+  model_save_freq: 100
+  max_reward: 1000
+  max_timestep: 1000
+  max_episodes: 1500
+  hidden_dims: 128
+
+# A3C Hyperparameters
+flappy-bird:
+  env_id: FlappyBird-v0
+  input_model_name: flappy
+  output_model_name: flappy
   replay_memory_size: 100000
   mini_batch_size: 128
   gamma: 0.99
@@ -13,3 +29,43 @@ cartpole:
   max_timestep: 1600
   max_episodes: 3000
   hidden_dims: 128
+
+
+# A3C Hyperparameters
+acrobot:
+  env_id: Acrobot-v1
+  input_model_name: acrobot1
+  output_model_name: acrobot1
+  replay_memory_size: 100000
+  mini_batch_size: 128
+  gamma: 0.99
+  tau: 0.005
+  learning_rate: 0.0003
+  model_save_freq: 100
+  max_reward: 0
+  max_timestep: 500
+  max_episodes: 3000
+  hidden_dims: 128
+
+
+  # A3C Hyperparameters
+lunarlanding:
+  env_id: LunarLander-v2
+  input_model_name: lunarlanding1
+  output_model_name: lunarlanding1
+  replay_memory_size: 100000
+  mini_batch_size: 128
+  gamma: 0.99
+  tau: 0.005
+  learning_rate: 0.0003
+  model_save_freq: 100
+  max_reward: 250
+  max_timestep: 500
+  max_episodes: 10000
+  hidden_dims: 128
+  env_make_params:
+    continuous: False
+    gravity: -10
+    enable_wind: False
+    wind_power: 5
+    turbulence_power: 1.5
