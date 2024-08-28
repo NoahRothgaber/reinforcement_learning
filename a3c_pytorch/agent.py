@@ -7,6 +7,10 @@ import matplotlib.pyplot as plt
 
 import itertools
 
+import threading
+import time
+
+
 import torch
 from torch import nn
 import torch.nn.functional as F
@@ -64,8 +68,6 @@ class WorkerAgent(mp.Process):
         self.optimizer = optimizer
         self.env_make_params = env_make_params
 
-
-    
         # Create instance of the environment.
         self.env = gym.make(self.env_id, render_mode=None, **self.env_make_params)
 
@@ -95,14 +97,14 @@ class WorkerAgent(mp.Process):
             # reset some data
             self.step_count = 0
 
-            while(not terminated and not truncated and not self.step_count == self.max_timestep):
+            while(not terminated and not self.step_count == self.max_timestep):
                     action = self.local_actor_critic.choose_action(state)
                     
                     next_state, reward, terminated, truncated, _ = self.env.step(action)
 
                     episode_reward+= reward
 
-                    terminated = self.step_count == self.max_timestep - 1 or terminated or truncated
+                    terminated = self.step_count == self.max_timestep - 1 or terminated #or truncated
                     
                     self.local_actor_critic.memory.add(state, action, reward, terminated)
 
@@ -142,7 +144,6 @@ class WorkerAgent(mp.Process):
 
         # Clears previous episode memory
         self.local_actor_critic.memory.reset()
-
 
 
 # A3C Agent
@@ -200,7 +201,6 @@ class GlobalAgent():
         if self.continue_training:
             self.is_training = True
 
-        #self.step_count = 0
 
         self.workers = []
 
@@ -246,7 +246,8 @@ class GlobalAgent():
             
         
     def run(self):
-
+        # Start the 
+        # initialize data collection thread
         self.initialize_workers()
         self.save_graph()
         print("Max Episodes Reached!")
@@ -261,21 +262,20 @@ class GlobalAgent():
             state, _ = self.env.reset()  # Initialize environment. Reset returns (state,info)
             
             terminated = False      # True when agent reaches goal or fails
-            truncated = False       # True when max_timestep is reached
             episode_reward = 0.0    # Used to accumulate rewards per episode
             self.step_count = 0
 
-            while(not terminated and not truncated and not self.step_count == self.max_timestep):
+            while(not terminated and not self.step_count == self.max_timestep):
                     action = self.global_actor_critic.choose_action(state)
                     
-                    next_state, reward, terminated, truncated, _ = self.env.step(action)
+                    next_state, reward, terminated, _, _ = self.env.step(action)
                     episode_reward+= reward
-                    terminated = self.step_count == self.max_timestep - 1 or terminated or truncated
+                    terminated = self.step_count == self.max_timestep - 1 or terminated
                     
                     self.step_count += 1
                     state = next_state
-                    
-            log_message = f"{datetime.now().strftime(self.DATE_FORMAT)}: This Episode Reward: {episode_reward:0.1f}"
+
+            log_message = f"Test Episode {episode} Reward: {episode_reward:0.1f}"
             print(log_message)
             
 
@@ -308,24 +308,64 @@ class GlobalAgent():
         # Convert shared array to list
         rewards = list(self.rewards_per_episode)
         
-        fig, ax = plt.subplots()
-
+        # Create figure and axis
+        fig, ax = plt.subplots(figsize=(10, 8))  # Increased figure size to accommodate text box
+        
         # Plot the rewards
         ax.plot(rewards, label='Reward per Episode')
         
-        # Optionally, calculate and plot the moving average
+        # Calculate and plot the moving average
         moving_avg = np.convolve(rewards, np.ones(100)/100, mode='valid')
         ax.plot(range(len(moving_avg)), moving_avg, label='100-episode Moving Avg', color='orange')
-
+        
         ax.set_xlabel('Episode')
         ax.set_ylabel('Reward')
-        ax.set_title('Episode Rewards')
+        ax.set_title(f'A3C on {self.env_id}')
         ax.legend()
-
+        
+        # Add text box with hyperparameters
+        hyperparameters = (
+            f"env_id: {self.env_id}\n"
+            f"input_model: {self.input_model_name}"
+            f"output_model: {self.output_model_name}\n"
+            f"gamma: {self.gamma}"
+            f"tau: {self.tau}"
+            f"learning_rate: {self.learning_rate}\n"
+            f"max_reward: {self.max_reward}"
+            f"max_timesteps: {self.max_timestep}\n"
+            f"max_episodes: {self.max_episodes}"
+            f"hidden_dims: {self.hidden_dims}\n"
+        )
+        
+    
+        # Place the text box
+        plt.text(0.5, -0.15, hyperparameters, transform=ax.transAxes, fontsize=11,
+                verticalalignment='top', bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+        
+        # Adjust the layout to make room for the text box
+        plt.tight_layout()
+        plt.subplots_adjust(bottom=0.3)  # Adjust this value as needed
+        
+        # Save the figure
         plt.savefig(self.GRAPH_FILE)
         plt.close(fig)
 
 
+    def save_graph_periodically(self, interval=100):
+        while self.global_episode_index.value < self.max_episodes:
+            # Sleep until the next save
+            time.sleep(1)  # Check every second if the interval has been reached
+            
+            # Save graph every 100 episodes
+            if self.global_episode_index.value % interval == 0 and self.global_episode_index.value != 0:
+                self.save_graph()
+                print(f"Graph saved at episode {self.global_episode_index.value}.")
+                
+            # Exit loop if training is done
+            if self.global_episode_index.value >= self.max_episodes:
+                break
+
+    
     def initialize_workers(self):
         for i in range(mp.cpu_count()):
             worker_name = f'Worker {i}'
