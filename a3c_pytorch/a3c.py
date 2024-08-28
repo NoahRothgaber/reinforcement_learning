@@ -115,7 +115,7 @@ class A3CActorCritic(nn.Module):
         return total_loss
 
     def choose_action(self, observation):
-        state = torch.tensor([observation], dtype=torch.float)
+        state = torch.tensor(np.array(observation), dtype=torch.float).unsqueeze(0)
         policy, value = self.forward(state)
         probs = torch.softmax(policy, dim=1)
         dist = Categorical(probs)
