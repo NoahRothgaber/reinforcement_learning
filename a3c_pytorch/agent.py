@@ -86,15 +86,7 @@ class WorkerAgent(mp.Process):
         for episode in itertools.count():
             # init stuff
             state, _ = self.env.reset()  # Initialize environment. Reset returns (state,info)
-            
-            terminated = False      # True when agent reaches goal or fails
-            truncated = False       # True when max_timestep is reached
-
-            episode_reward = 0.0    # Used to accumulate rewards per episode
-
-            self.local_actor_critic.memory.reset()  # clear all the data in the replay buffer at the start of each episode
-
-            # reset some data
+            elf.save_graph()
             self.step_count = 0
 
             while(not terminated and not self.step_count == self.max_timestep):
@@ -169,7 +161,7 @@ class GlobalAgent():
         self.max_reward             = hyperparameters['max_reward']
         self.max_timestep           = hyperparameters['max_timestep']
         self.max_episodes           = hyperparameters['max_episodes']
-        self.hidden_dims           = hyperparameters['hidden_dims']
+        self.hidden_dims           = hyperpelf.save_graph()arameters['hidden_dims']
         self.env_make_params        = hyperparameters.get('env_make_params',{})     # Get optional environment-specific parameters, default to empty dict
         
         # Global variables that can be modified across threads
@@ -246,14 +238,25 @@ class GlobalAgent():
             
         
     def run(self):
-        # Start the 
-        # initialize data collection thread
+        # Start the graph-saving thread
+        graph_thread = threading.Thread(target=self.save_graph_periodically, args=(100,))
+        graph_thread.start()
+        
+        # Start worker threads
         self.initialize_workers()
+
+        # Wait for all workers to complete
+        [w.join() for w in self.workers]
+
+        # Ensure the graph-saving thread finishes
+        graph_thread.join()
         self.save_graph()
         print("Max Episodes Reached!")
 
-        # Save model
+        # Save final model
         self.save()
+        self.save_graph()
+
         
     def testing(self):
 
@@ -353,17 +356,14 @@ class GlobalAgent():
 
     def save_graph_periodically(self, interval=100):
         while self.global_episode_index.value < self.max_episodes:
-            # Sleep until the next save
-            time.sleep(1)  # Check every second if the interval has been reached
-            
-            # Save graph every 100 episodes
-            if self.global_episode_index.value % interval == 0 and self.global_episode_index.value != 0:
-                self.save_graph()
-                print(f"Graph saved at episode {self.global_episode_index.value}.")
-                
-            # Exit loop if training is done
+            # Sleep until the next check
+            time.sleep(5)  # Adjust sleep time if necessary
+            self.save_graph()
+            # Exit the loop if the training is complete
             if self.global_episode_index.value >= self.max_episodes:
+                print("Exiting graph-saving thread as max episodes reached.")
                 break
+
 
     
     def initialize_workers(self):
@@ -375,7 +375,7 @@ class GlobalAgent():
                                       max_reward=self.max_reward, hidden_dims=self.hidden_dims, env_make_params= self.env_make_params)
             self.workers.append(temp_worker)
         [w.start() for w in self.workers]
-        [w.join() for w in self.workers] 
+        # [w.join() for w in self.workers] 
         
 
 if __name__ == '__main__':
