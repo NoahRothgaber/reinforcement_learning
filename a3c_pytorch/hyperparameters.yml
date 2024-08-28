@@ -1,17 +1,18 @@
 # A3C Hyperparameters
 cartpole:
   env_id: CartPole-v1
-  input_model_name: cartpole4
-  output_model_name: cartpole4
+  input_model_name: cartpole5
+  output_model_name: cartpole5
   replay_memory_size: 100000
   mini_batch_size: 128
   gamma: 0.99
   tau: 0.005
   learning_rate: 0.0003
   model_save_freq: 100
+  min_reward: 0
   max_reward: 1000
   max_timestep: 1000
-  max_episodes: 1500
+  max_episodes: 1000
   hidden_dims: 128
 
 # A3C Hyperparameters
