@@ -82,41 +82,41 @@ class WorkerAgent(mp.Process):
 
 
     def run(self):
+        while True:
+            # Use a local variable to track the global episode count
+            with self.global_episode_index.get_lock():
+                local_episode_index = self.global_episode_index.value
 
-        for episode in itertools.count():
-            # init stuff
-            state, _ = self.env.reset()  # Initialize environment. Reset returns (state,info)
-            elf.save_graph()
+            if local_episode_index >= self.max_episodes:
+                print(f"{self.name} stopping: global episode count reached max_episodes {self.max_episodes}.")
+                break
+
+            # Initialize environment, variables, and run episode
+            state, _ = self.env.reset()
+            terminated = False
+            episode_reward = 0.0
             self.step_count = 0
 
-            while(not terminated and not self.step_count == self.max_timestep):
-                    action = self.local_actor_critic.choose_action(state)
-                    
-                    next_state, reward, terminated, truncated, _ = self.env.step(action)
+            while not terminated and self.step_count < self.max_timestep:
+                action = self.local_actor_critic.choose_action(state)
+                next_state, reward, terminated, _, _ = self.env.step(action)
+                episode_reward += reward
+                self.local_actor_critic.memory.add(state, action, reward, terminated)
+                self.step_count += 1
+                state = next_state
 
-                    episode_reward+= reward
+            # Train after each episode
+            self.train(terminated)
 
-                    terminated = self.step_count == self.max_timestep - 1 or terminated #or truncated
-                    
-                    self.local_actor_critic.memory.add(state, action, reward, terminated)
-
-                    self.step_count += 1
-                    state = next_state
-            # Train after each episode        
-            self.train(terminated)     
-
+            # Update the global episode index and rewards
             with self.global_episode_index.get_lock():
                 self.global_episode_index.value += 1
+                current_global_episode = self.global_episode_index.value
 
             with self.rewards_per_episode.get_lock():
-                self.rewards_per_episode[self.global_episode_index.value] = episode_reward
+                self.rewards_per_episode[current_global_episode] = episode_reward
 
-            print(self.name, 'episode ', self.global_episode_index.value, 'reward %.1f' % episode_reward)
-
-             # Check if global episode count exceeds max_episodes
-            if self.global_episode_index.value >= self.max_episodes:
-                print(f"{self.name} stopping: global episode count reached max_episodes {self.max_episodes}.")
-                break  
+            print(self.name, 'episode ', current_global_episode, 'reward %.1f' % episode_reward)
 
     def train(self, terminated):
         # Calculate the Actor Critic loss
@@ -148,7 +148,6 @@ class GlobalAgent():
         self.hyperparameter_set = hyperparameter_set
         self.is_training = is_training
         self.continue_training = continue_training
-
         self.env_id                 = hyperparameters['env_id']
         self.input_model_name       = hyperparameters['input_model_name']
         self.output_model_name      = hyperparameters['output_model_name']
@@ -158,11 +157,14 @@ class GlobalAgent():
         self.tau                    = hyperparameters['tau']
         self.learning_rate          = hyperparameters['learning_rate']
         self.model_save_freq        = hyperparameters['model_save_freq']
+        self.min_reward             = hyperparameters['min_reward']
         self.max_reward             = hyperparameters['max_reward']
         self.max_timestep           = hyperparameters['max_timestep']
         self.max_episodes           = hyperparameters['max_episodes']
-        self.hidden_dims           = hyperpelf.save_graph()arameters['hidden_dims']
+        self.hidden_dims           = hyperparameters['hidden_dims']
         self.env_make_params        = hyperparameters.get('env_make_params',{})     # Get optional environment-specific parameters, default to empty dict
+
+        self.highest_average_reward = self.min_reward
         
         # Global variables that can be modified across threads
         self.global_episode_index = mp.Value('i', 0) # global episode tracker
@@ -183,7 +185,7 @@ class GlobalAgent():
         self.DATE_FORMAT = "%m-%d %H:%M:%S"
 
         self.device = 'cpu'
-
+        self.last_graph_update_time = datetime.now()
         # set endless mode if endless arg is true, otherwise set max episodes based on parameters 
         # if endless or not self.is_training:
         #     self.max_episodes = itertools.count()
@@ -239,7 +241,7 @@ class GlobalAgent():
         
     def run(self):
         # Start the graph-saving thread
-        graph_thread = threading.Thread(target=self.save_graph_periodically, args=(100,))
+        graph_thread = threading.Thread(target=self.save_graph_periodically)
         graph_thread.start()
         
         # Start worker threads
@@ -250,12 +252,13 @@ class GlobalAgent():
 
         # Ensure the graph-saving thread finishes
         graph_thread.join()
-        self.save_graph()
+        
         print("Max Episodes Reached!")
 
         # Save final model
         self.save()
         self.save_graph()
+        exit()
 
         
     def testing(self):
@@ -307,19 +310,30 @@ class GlobalAgent():
             print(f"Starting Training...")
     
         
-    def save_graph(self):
-        # Convert shared array to list
-        rewards = list(self.rewards_per_episode)
+    def save_graph(self, write_new=False):
+
+        if write_new:
+            file = os.path.join(self.RUNS_DIR, f'BEST_AVERAGE_{self.OUTPUT_FILENAME}.png')
+        else:
+            file = self.GRAPH_FILE    
+        #Get the number of episodes that have actually occurred
+        with self.global_episode_index.get_lock():
+            num_episodes = self.global_episode_index.value
+        
+        # Convert shared array to list, but only take the valid episodes
+        with self.rewards_per_episode.get_lock():
+            rewards = list(self.rewards_per_episode[:num_episodes])
         
         # Create figure and axis
-        fig, ax = plt.subplots(figsize=(10, 8))  # Increased figure size to accommodate text box
+        fig, ax = plt.subplots(figsize=(10, 8))  # Increased figure size
         
         # Plot the rewards
         ax.plot(rewards, label='Reward per Episode')
         
         # Calculate and plot the moving average
-        moving_avg = np.convolve(rewards, np.ones(100)/100, mode='valid')
-        ax.plot(range(len(moving_avg)), moving_avg, label='100-episode Moving Avg', color='orange')
+        if len(rewards) >= 100:
+            moving_avg = np.convolve(rewards, np.ones(100)/100, mode='valid')
+            ax.plot(range(99, len(rewards)), moving_avg, label='100-episode Moving Avg', color='orange')
         
         ax.set_xlabel('Episode')
         ax.set_ylabel('Reward')
@@ -328,41 +342,66 @@ class GlobalAgent():
         
         # Add text box with hyperparameters
         hyperparameters = (
-            f"env_id: {self.env_id}\n"
+            f"env_id: {self.env_id}\n\n"
             f"input_model: {self.input_model_name}"
-            f"output_model: {self.output_model_name}\n"
+            f"    output_model: {self.output_model_name}\n\n"
             f"gamma: {self.gamma}"
-            f"tau: {self.tau}"
-            f"learning_rate: {self.learning_rate}\n"
+            f"    tau: {self.tau}"
+            f"    learning_rate: {self.learning_rate}\n\n"
             f"max_reward: {self.max_reward}"
-            f"max_timesteps: {self.max_timestep}\n"
+            f"    max_timesteps: {self.max_timestep}\n\n"
             f"max_episodes: {self.max_episodes}"
-            f"hidden_dims: {self.hidden_dims}\n"
+            f"    hidden_dims: {self.hidden_dims}\n\n"
         )
-        
-    
-        # Place the text box
-        plt.text(0.5, -0.15, hyperparameters, transform=ax.transAxes, fontsize=11,
-                verticalalignment='top', bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
-        
-        # Adjust the layout to make room for the text box
+
+         # Place the text box
+        plt.text(0.5, -0.2, hyperparameters, transform=ax.transAxes, fontsize=12,
+            verticalalignment='top', horizontalalignment='center',
+            bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5, pad=1),
+            wrap=True)
+
+            # Adjust the layout to make room for the text box
         plt.tight_layout()
-        plt.subplots_adjust(bottom=0.3)  # Adjust this value as needed
+        plt.subplots_adjust(bottom=0.40)  # Increased bottom margin
         
         # Save the figure
-        plt.savefig(self.GRAPH_FILE)
+        plt.savefig(file)
         plt.close(fig)
 
+    def save_graph_periodically(self):
+        while True:
+            with self.global_episode_index.get_lock():
+                episode_count = self.global_episode_index.value
+            try:
+                with self.rewards_per_episode.get_lock():
+                    rewards = list(self.rewards_per_episode[:episode_count])
+                    if rewards:
+                        current_average_reward = np.mean(rewards)
+                        print(f'Current Average: {current_average_reward}, Highest Recorded: {self.highest_average_reward}')
+                        if abs(current_average_reward - self.max_reward) < abs(self.highest_average_reward - self.max_reward):
+                            self.save()
+                            self.highest_average_reward = current_average_reward
+                            print("New highest average reward recorded and graph saved.")
+                            self.save_graph(True)
+                    else:
+                        print("No rewards recorded yet.")
+                
+                
+            except Exception as e:
+                print(f"Exception in thread: {e}")  
+                
+            current_time = datetime.now()
+            if current_time - self.last_graph_update_time > timedelta(seconds=5):
+                with self.rewards_per_episode.get_lock():  # Ensure graph is saved with consistent data
+                    self.save_graph()
+                    self.last_graph_update_time = current_time
 
-    def save_graph_periodically(self, interval=100):
-        while self.global_episode_index.value < self.max_episodes:
-            # Sleep until the next check
-            time.sleep(5)  # Adjust sleep time if necessary
-            self.save_graph()
-            # Exit the loop if the training is complete
-            if self.global_episode_index.value >= self.max_episodes:
-                print("Exiting graph-saving thread as max episodes reached.")
-                break
+                if episode_count >= self.max_episodes:
+                    print("Exiting graph-saving thread as max episodes reached.")
+
+            # Sleep for a short while to reduce CPU usage
+            time.sleep(1)
+
 
 
     
