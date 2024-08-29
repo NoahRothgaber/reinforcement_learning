@@ -1,8 +1,8 @@
 # A3C Hyperparameters
 cartpole:
   env_id: CartPole-v1
-  input_model_name: cartpole5
-  output_model_name: cartpole5
+  input_model_name: cartpole1
+  output_model_name: cartpole1
   replay_memory_size: 100000
   mini_batch_size: 128
   gamma: 0.99
@@ -12,25 +12,8 @@ cartpole:
   min_reward: 0
   max_reward: 1000
   max_timestep: 1000
-  max_episodes: 1000
+  max_episodes: 2000
   hidden_dims: 128
-
-# A3C Hyperparameters
-flappy-bird:
-  env_id: FlappyBird-v0
-  input_model_name: flappy
-  output_model_name: flappy
-  replay_memory_size: 100000
-  mini_batch_size: 128
-  gamma: 0.99
-  tau: 0.005
-  learning_rate: 0.0003
-  model_save_freq: 100
-  max_reward: 300
-  max_timestep: 1600
-  max_episodes: 3000
-  hidden_dims: 128
-
 
 # A3C Hyperparameters
 acrobot:
@@ -43,6 +26,7 @@ acrobot:
   tau: 0.005
   learning_rate: 0.0003
   model_save_freq: 100
+  min_reward: -500
   max_reward: 0
   max_timestep: 500
   max_episodes: 3000
@@ -60,7 +44,8 @@ lunarlanding:
   tau: 0.005
   learning_rate: 0.0003
   model_save_freq: 100
-  max_reward: 250
+  min_reward: -1000
+  max_reward: 300
   max_timestep: 500
   max_episodes: 10000
   hidden_dims: 128
@@ -70,3 +55,23 @@ lunarlanding:
     enable_wind: False
     wind_power: 5
     turbulence_power: 1.5
+
+  
+# A3C Hyperparameters
+flappybird:
+  env_id: FlappyBird-v0
+  input_model_name: flappy
+  output_model_name: flappy
+  replay_memory_size: 100000
+  mini_batch_size: 128
+  gamma: 0.99
+  tau: 0.005
+  learning_rate: 0.0003
+  model_save_freq: 100
+  min_reward: -100
+  max_reward: 300
+  max_timestep: 1600
+  max_episodes: 3000
+  hidden_dims: 128
+  env_make_params:
+    use_lidar: True
