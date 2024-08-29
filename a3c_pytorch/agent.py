@@ -88,13 +88,18 @@ class GlobalAgent():
         if self.output_model_name == None:
             self.output_model_name = hyperparameter_set
 
-        self.RUNS_DIR = "runs"
+    
         self.INPUT_FILENAME = self.input_model_name
         self.OUTPUT_FILENAME = self.output_model_name
+
+        self.RUNS_DIR = "runs"
         os.makedirs(self.RUNS_DIR, exist_ok=True)
         self.TRAIN_LOG_FILE   = os.path.join(self.RUNS_DIR, f'{self.INPUT_FILENAME}_train.log')
         self.TEST_LOG_FILE   = os.path.join(self.RUNS_DIR, f'{self.INPUT_FILENAME}_test.log')
-        self.GRAPH_FILE = os.path.join(self.RUNS_DIR, f'{self.OUTPUT_FILENAME}.png')
+
+        self.CUMULATIVE_GRAPH_FILE = os.path.join(self.RUNS_DIR, f'{self.OUTPUT_FILENAME}.png')
+        self.BEST_AVG_GRAPH_FILE = os.path.join(self.RUNS_DIR, f'{self.OUTPUT_FILENAME}_best_average.png')
+        
         self.DATE_FORMAT = "%m-%d %H:%M:%S"
 
         self.device = 'cpu'
@@ -228,9 +233,9 @@ class GlobalAgent():
     
     def save_graph(self, write_new=False):
         if write_new:
-            file = os.path.join(self.RUNS_DIR, f'{self.OUTPUT_FILENAME}_best_average.png')
+            file = self.BEST_AVG_GRAPH_FILE
         else:
-            file = self.GRAPH_FILE
+            file = self.CUMULATIVE_GRAPH_FILE
         
         # Get the number of episodes that have actually occurred
         with self.global_episode_index.get_lock():
