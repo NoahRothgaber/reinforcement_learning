@@ -163,10 +163,11 @@ class GlobalAgent():
         # Wait for all workers to complete
         [w.join() for w in self.workers]
 
+        print("All Worker Threads Closed.")
+
         # Ensure the graph-saving thread finishes
         graph_thread.join()
        
-        
         print("Max Episodes Reached!")
 
         # Save final graph
@@ -282,18 +283,22 @@ class GlobalAgent():
         while True:
             with self.global_episode_index.get_lock():
                 episode_count = self.global_episode_index.value
+
+                if episode_count >= self.max_episodes:
+                    print("Exiting Graph-Saving thread as max episodes reached.")
+                    break
             try:
                 with self.rewards_per_episode.get_lock():
                     rewards = list(self.rewards_per_episode[:episode_count])
                     if rewards:
                         last_100_avg = np.mean(rewards[-100])
                         cumulative_average_reward = np.mean(rewards)
-                        print(f'Cumulative Average: {cumulative_average_reward}, Last 100 avg reward: {last_100_avg}')
+                        print(f'Cumulative Avg Reward: {cumulative_average_reward}, Last 100 Avg Reward: {last_100_avg}')
                         if abs(last_100_avg - self.max_reward) < abs(self.highest_average_reward - self.max_reward): 
                             self.save_model()
                             self.save_graph(True)
                             self.highest_average_reward = last_100_avg
-                            print(f"New highest last 100 avg reward: {last_100_avg}. Graph Saved.")
+                            print(f"New highest Last 100 Avg Reward: {last_100_avg}. Model Saved.")
                     else:
                         print("No rewards recorded yet.")
             except Exception as e:
@@ -305,9 +310,6 @@ class GlobalAgent():
                     self.save_graph(False)
                     self.last_graph_update_time = current_time
 
-                if episode_count >= self.max_episodes:
-                    print("Exiting graph-saving thread as max episodes reached.")
-                    break
 
             # Sleep for a short while to reduce CPU usage
             time.sleep(1)
@@ -321,7 +323,6 @@ class GlobalAgent():
                                       max_reward=self.max_reward, hidden_dims=self.hidden_dims, env_make_params= self.env_make_params)
             self.workers.append(temp_worker)
         [w.start() for w in self.workers]
-        # [w.join() for w in self.workers] 
 
                 
 class WorkerAgent(mp.Process):
@@ -358,8 +359,6 @@ class WorkerAgent(mp.Process):
         self.local_actor_critic = A3CActorCritic(self.num_states, self.num_actions, self.gamma, self.replay_buffer_size, self.hidden_dims)
         self.global_actor_critic = global_actor_critic
 
-
-
     def run(self):
         while True:
             # Use a local variable to track the global episode count
@@ -367,7 +366,7 @@ class WorkerAgent(mp.Process):
                 local_episode_index = self.global_episode_index.value
 
             if local_episode_index >= self.max_episodes:
-                print(f"{self.name} stopping: global episode count reached max_episodes {self.max_episodes}.")
+                print(f"{self.name} Stopping: Max Episodes reached ({self.max_episodes}).")
                 break
 
             # Initialize environment, variables, and run episode
@@ -395,7 +394,8 @@ class WorkerAgent(mp.Process):
             with self.rewards_per_episode.get_lock():
                 self.rewards_per_episode[current_global_episode] = episode_reward
 
-            print(self.name, 'episode ', current_global_episode, 'reward %.1f' % episode_reward)
+            print(f"{self.name}: Episode {current_global_episode} Reward: {episode_reward:.1f}")
+
 
     def train(self, terminated):
         # Calculate the Actor Critic loss
@@ -417,7 +417,6 @@ class WorkerAgent(mp.Process):
         self.local_actor_critic.memory.reset()
 
         
-
 if __name__ == '__main__':
     # Parse command line inputs
     parser = argparse.ArgumentParser(description='Train or test model.')
@@ -427,9 +426,6 @@ if __name__ == '__main__':
     parser.add_argument('--render', help='Rendering mode', action='store_true')
     parser.add_argument('--endless', help='Endless mode', action='store_true')
     args = parser.parse_args()
-
-
-
 
     # create global agent
     globalAgent = GlobalAgent(args.train, args.endless, args.continue_training, args.render, hyperparameter_set=args.hyperparameters)
