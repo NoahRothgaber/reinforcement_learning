@@ -92,7 +92,8 @@ class GlobalAgent():
         self.INPUT_FILENAME = self.input_model_name
         self.OUTPUT_FILENAME = self.output_model_name
         os.makedirs(self.RUNS_DIR, exist_ok=True)
-        self.LOG_FILE   = os.path.join(self.RUNS_DIR, f'{self.INPUT_FILENAME}.log')
+        self.TRAIN_LOG_FILE   = os.path.join(self.RUNS_DIR, f'{self.INPUT_FILENAME}_train.log')
+        self.TEST_LOG_FILE   = os.path.join(self.RUNS_DIR, f'{self.INPUT_FILENAME}_test.log')
         self.GRAPH_FILE = os.path.join(self.RUNS_DIR, f'{self.OUTPUT_FILENAME}.png')
         self.DATE_FORMAT = "%m-%d %H:%M:%S"
 
@@ -130,9 +131,9 @@ class GlobalAgent():
             start_time = datetime.now()
             self.last_graph_update_time = start_time
 
-            log_message = f"{start_time.strftime(self.DATE_FORMAT)}: Training starting..."
+            log_message = f"{start_time.strftime(self.DATE_FORMAT)}: Training {self.output_model_name} starting..."
             print(log_message)
-            with open(self.LOG_FILE, 'w') as file:
+            with open(self.TRAIN_LOG_FILE, 'w') as file:
                 file.write(log_message + '\n')
             
             if self.continue_training:
@@ -145,8 +146,12 @@ class GlobalAgent():
             self.load()
             self.global_actor_critic.eval()
             start_time = datetime.now()
-            log_message = f"{start_time.strftime(self.DATE_FORMAT)}: Testing starting..."
+
+            log_message = f"{start_time.strftime(self.DATE_FORMAT)}: Testing {self.input_model_name} starting..."
             print(log_message)
+
+            with open(self.TEST_LOG_FILE, 'w') as test_file:
+                test_file.write(log_message + '\n')
             
             # Test our model in the environment
             self.testing()
@@ -190,9 +195,12 @@ class GlobalAgent():
                     
                     self.step_count += 1
                     state = next_state
-
-            log_message = f"Test Episode {episode} Reward: {episode_reward:0.1f}"
+            current_time = datetime.now()
+            log_message = f"{current_time.strftime(self.DATE_FORMAT)}: Test Episode {episode} Reward: {episode_reward:0.1f}"
             print(log_message)
+            with open(self.TEST_LOG_FILE, 'a') as test_file:
+                test_file.write(log_message + '\n')
+            
             
     # There is no functional difference between . pt and . pth when saving PyTorch models
     def save_model(self):
@@ -296,9 +304,10 @@ class GlobalAgent():
                         cumulative_average_reward = np.mean(rewards)
 
                         # Write avgs to file 
-                        log_message = f'At Episode {episode_count}: Cumulative Avg Reward: {cumulative_average_reward:.2f}, Last 100 Avg Reward: {last_100_avg}'
+                        current_time = datetime.now()
+                        log_message = f'{current_time.strftime(self.DATE_FORMAT)}: At Episode {episode_count}: Cumulative Avg Reward: {cumulative_average_reward:.2f}, Last 100 Avg Reward: {last_100_avg}'
                         print(log_message)
-                        with open(self.LOG_FILE, 'a') as file:
+                        with open(self.TRAIN_LOG_FILE, 'a') as file:
                             file.write(log_message + '\n')
 
                         if abs(last_100_avg - self.max_reward) < abs(self.highest_average_reward - self.max_reward): 
