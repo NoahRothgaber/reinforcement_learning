@@ -222,8 +222,9 @@ class GlobalAgent():
         if write_new:
             file = os.path.join(self.RUNS_DIR, f'{self.OUTPUT_FILENAME}_best_average.png')
         else:
-            file = self.GRAPH_FILE    
-        #Get the number of episodes that have actually occurred
+            file = self.GRAPH_FILE
+        
+        # Get the number of episodes that have actually occurred
         with self.global_episode_index.get_lock():
             num_episodes = self.global_episode_index.value
         
@@ -242,6 +243,10 @@ class GlobalAgent():
             moving_avg = np.convolve(rewards, np.ones(100)/100, mode='valid')
             ax.plot(range(99, len(rewards)), moving_avg, label='100-episode Moving Avg', color='orange')
         
+        # Calculate and plot the cumulative average
+        cumulative_avg = np.cumsum(rewards) / (np.arange(len(rewards)) + 1)
+        ax.plot(cumulative_avg, label='Cumulative Average', color='green')
+
         ax.set_xlabel('Episode')
         ax.set_ylabel('Reward')
         ax.set_title(f'A3C on {self.env_id}')
@@ -289,7 +294,13 @@ class GlobalAgent():
                     if rewards:
                         last_100_avg = np.mean(rewards[-100])
                         cumulative_average_reward = np.mean(rewards)
-                        print(f'Cumulative Avg Reward: {cumulative_average_reward}, Last 100 Avg Reward: {last_100_avg}')
+
+                        # Write avgs to file 
+                        log_message = f'At Episode {episode_count}: Cumulative Avg Reward: {cumulative_average_reward:.2f}, Last 100 Avg Reward: {last_100_avg}'
+                        print(log_message)
+                        with open(self.LOG_FILE, 'a') as file:
+                            file.write(log_message + '\n')
+
                         if abs(last_100_avg - self.max_reward) < abs(self.highest_average_reward - self.max_reward): 
                             self.save_model()
                             self.save_graph(True)
@@ -411,7 +422,6 @@ class WorkerAgent(mp.Process):
         # Clears previous episode memory
         self.local_actor_critic.memory.reset()
 
-        
 if __name__ == '__main__':
     # Parse command line inputs
     parser = argparse.ArgumentParser(description='Train or test model.')
