@@ -62,8 +62,8 @@ class GlobalAgent():
         self.env_id                 = hyperparameters['env_id']
         self.input_model_name       = hyperparameters['input_model_name']
         self.output_model_name      = hyperparameters['output_model_name']
-        self.replay_buffer_size     = hyperparameters['replay_memory_size']         # size of replay memory
-        self.batch_size             = hyperparameters['mini_batch_size']            # size of the training data set sampled from the replay memory
+        self.replay_buffer_size     = hyperparameters['replay_memory_size']
+        self.batch_size             = hyperparameters['mini_batch_size']
         self.gamma                  = hyperparameters['gamma']
         self.tau                    = hyperparameters['tau']
         self.learning_rate          = hyperparameters['learning_rate']
@@ -145,13 +145,12 @@ class GlobalAgent():
             self.load()
             self.global_actor_critic.eval()
             start_time = datetime.now()
-            log_message = f"{start_time.strftime(self.DATE_FORMAT)}: Run starting..."
+            log_message = f"{start_time.strftime(self.DATE_FORMAT)}: Testing starting..."
             print(log_message)
             
             # Test our model in the environment
             self.testing()
             
-        
     def run(self):
         # Start the graph-saving thread
         graph_thread = threading.Thread(target=self.save_graph_periodically)
@@ -174,12 +173,10 @@ class GlobalAgent():
         self.save_graph()
         exit()
 
-        
     def testing(self):
         for episode in itertools.count():
             # init stuff
             state, _ = self.env.reset()  # Initialize environment. Reset returns (state,info)
-            
             terminated = False      # True when agent reaches goal or fails
             episode_reward = 0.0    # Used to accumulate rewards per episode
             self.step_count = 0
@@ -221,7 +218,6 @@ class GlobalAgent():
             self.is_training = True
             print(f"Starting Training...")
     
-        
     def save_graph(self, write_new=False):
         if write_new:
             file = os.path.join(self.RUNS_DIR, f'{self.OUTPUT_FILENAME}_best_average.png')
@@ -310,7 +306,6 @@ class GlobalAgent():
                     self.save_graph(False)
                     self.last_graph_update_time = current_time
 
-
             # Sleep for a short while to reduce CPU usage
             time.sleep(1)
 
@@ -324,14 +319,14 @@ class GlobalAgent():
             self.workers.append(temp_worker)
         [w.start() for w in self.workers]
 
-                
+
 class WorkerAgent(mp.Process):
 
     def __init__(self, name, env_id, env_make_params, gamma, tau, learning_rate, max_reward, max_timestep, max_episodes,
                   replay_buffer_size, hidden_dims, global_actor_critic, global_episode_index, rewards_per_episode, optimizer):
         super(WorkerAgent, self).__init__()
 
-        # Initizalize parameters
+        # Initizalize parameters from the Global Agent
         self.name = name
         self.env_id = env_id
         self.gamma = gamma
