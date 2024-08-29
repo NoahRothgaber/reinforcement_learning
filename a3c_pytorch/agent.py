@@ -255,8 +255,7 @@ class GlobalAgent():
         
         print("Max Episodes Reached!")
 
-        # Save final model
-        self.save()
+        # Save final graph
         self.save_graph()
         exit()
 
@@ -286,7 +285,7 @@ class GlobalAgent():
             
 
     # There is no functional difference between . pt and . pth when saving PyTorch models
-    def save(self):
+    def save_model(self):
         if not os.path.exists(self.RUNS_DIR):
             os.makedirs(self.RUNS_DIR)
         torch.save(self.global_actor_critic.state_dict(), f"{self.RUNS_DIR}/{self.OUTPUT_FILENAME}_best_global_model.pth")
@@ -376,13 +375,15 @@ class GlobalAgent():
                 with self.rewards_per_episode.get_lock():
                     rewards = list(self.rewards_per_episode[:episode_count])
                     if rewards:
-                        current_average_reward = np.mean(rewards)
-                        print(f'Current Average: {current_average_reward}, Highest Recorded: {self.highest_average_reward}')
-                        if abs(current_average_reward - self.max_reward) < abs(self.highest_average_reward - self.max_reward):
-                            self.save()
-                            self.highest_average_reward = current_average_reward
-                            print("New highest average reward recorded and graph saved.")
+                        last_100_avg = np.mean(rewards[-100])
+                        cumulative_average_reward = np.mean(rewards)
+                        print(f'Cumulative Average: {cumulative_average_reward}, Last 100 avg reward: {last_100_avg}')
+                        if abs(last_100_avg - self.max_reward) < abs(self.highest_average_reward - self.max_reward): 
+                            self.save_model()
                             self.save_graph(True)
+                            self.highest_average_reward = last_100_avg
+                            print(f"New highest last 100 avg reward: {last_100_avg}. Graph Saved.")
+                            
                     else:
                         print("No rewards recorded yet.")
                 
