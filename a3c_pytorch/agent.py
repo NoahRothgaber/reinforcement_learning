@@ -289,12 +289,12 @@ class GlobalAgent():
     def save(self):
         if not os.path.exists(self.RUNS_DIR):
             os.makedirs(self.RUNS_DIR)
-        torch.save(self.global_actor_critic.state_dict(), f"{self.RUNS_DIR}/{self.OUTPUT_FILENAME}_global_actor_critic.pth")
+        torch.save(self.global_actor_critic.state_dict(), f"{self.RUNS_DIR}/{self.OUTPUT_FILENAME}_best_global_model.pth")
 
     def load(self):
         try:
             self.global_actor_critic.load_state_dict(
-                torch.load(f"{self.RUNS_DIR}/{self.INPUT_FILENAME}_global_actor_critic.pth")
+                torch.load(f"{self.RUNS_DIR}/{self.INPUT_FILENAME}_best_global_model.pth")
             )
             print("Model loaded successfully.")
         except FileNotFoundError:
@@ -313,7 +313,7 @@ class GlobalAgent():
     def save_graph(self, write_new=False):
 
         if write_new:
-            file = os.path.join(self.RUNS_DIR, f'BEST_AVERAGE_{self.OUTPUT_FILENAME}.png')
+            file = os.path.join(self.RUNS_DIR, f'{self.OUTPUT_FILENAME}_best_average.png')
         else:
             file = self.GRAPH_FILE    
         #Get the number of episodes that have actually occurred
