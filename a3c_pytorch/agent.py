@@ -52,10 +52,13 @@ class GlobalAgent():
             all_hyperparameter_sets = yaml.safe_load(file)
             hyperparameters = all_hyperparameter_sets[hyperparameter_set]
 
+        # Command Line Arguments
         self.hyperparameter_set = hyperparameter_set
         self.continue_training = continue_training
+        self.endless = endless
         self.is_training = is_training
-        
+        self.render = render
+
         self.env_id                 = hyperparameters['env_id']
         self.input_model_name       = hyperparameters['input_model_name']
         self.output_model_name      = hyperparameters['output_model_name']
@@ -74,7 +77,7 @@ class GlobalAgent():
 
         # Global variables that can be modified across threads
         self.global_episode_index = mp.Value('i', 0) # global episode tracker
-        self.rewards_per_episode = mp.Array('d', self.max_episodes, lock=True)  # 'd' is for double precision float
+        self.rewards_per_episode = mp.Array('d', self.max_episodes + 16, lock=True)  # 'd' is for double precision float
 
         # Set the highest avg to the lowest possible reward
         self.highest_average_reward = self.min_reward
@@ -97,7 +100,7 @@ class GlobalAgent():
         self.last_graph_update_time = datetime.now()
 
         # set endless mode if endless arg is true, otherwise set max episodes based on parameters 
-        # if endless or not self.is_training:
+        # if self.endless:
         #     self.max_episodes = itertools.count()
         # else:
         #     self.max_episodes = range(self.max_episodes)
@@ -109,7 +112,7 @@ class GlobalAgent():
         self.workers = []
 
         # Create instance of the environment (Global Agent Env)
-        self.env = gym.make(self.env_id, render_mode='human' if render else None, **self.env_make_params)
+        self.env = gym.make(self.env_id, render_mode='human' if self.render else None, **self.env_make_params)
 
         # Numberof possible actions & observation space size
         self.num_actions = self.env.action_space.n
@@ -162,6 +165,7 @@ class GlobalAgent():
 
         # Ensure the graph-saving thread finishes
         graph_thread.join()
+       
         
         print("Max Episodes Reached!")
 
@@ -171,7 +175,6 @@ class GlobalAgent():
 
         
     def testing(self):
-
         for episode in itertools.count():
             # init stuff
             state, _ = self.env.reset()  # Initialize environment. Reset returns (state,info)
@@ -193,7 +196,6 @@ class GlobalAgent():
             log_message = f"Test Episode {episode} Reward: {episode_reward:0.1f}"
             print(log_message)
             
-
     # There is no functional difference between . pt and . pth when saving PyTorch models
     def save_model(self):
         if not os.path.exists(self.RUNS_DIR):
@@ -220,7 +222,6 @@ class GlobalAgent():
     
         
     def save_graph(self, write_new=False):
-
         if write_new:
             file = os.path.join(self.RUNS_DIR, f'{self.OUTPUT_FILENAME}_best_average.png')
         else:
@@ -293,29 +294,24 @@ class GlobalAgent():
                             self.save_graph(True)
                             self.highest_average_reward = last_100_avg
                             print(f"New highest last 100 avg reward: {last_100_avg}. Graph Saved.")
-                            
                     else:
                         print("No rewards recorded yet.")
-                
-                
             except Exception as e:
                 print(f"Exception in thread: {e}")  
                 
             current_time = datetime.now()
             if current_time - self.last_graph_update_time > timedelta(seconds=5):
                 with self.rewards_per_episode.get_lock():  # Ensure graph is saved with consistent data
-                    self.save_graph()
+                    self.save_graph(False)
                     self.last_graph_update_time = current_time
 
                 if episode_count >= self.max_episodes:
                     print("Exiting graph-saving thread as max episodes reached.")
+                    break
 
             # Sleep for a short while to reduce CPU usage
             time.sleep(1)
 
-
-
-    
     def initialize_workers(self):
         for i in range(mp.cpu_count()):
             worker_name = f'Worker {i}'
