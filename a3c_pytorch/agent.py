@@ -44,110 +44,18 @@ class SharedOptimizer(torch.optim.Adam):
                 state['exp_avg'].share_memory_()
                 state['exp_avg_sq'].share_memory_()
 
-                
-class WorkerAgent(mp.Process):
-
-    def __init__(self, name, env_id, env_make_params, gamma, tau, learning_rate, max_reward, max_timestep, max_episodes,
-                  replay_buffer_size, hidden_dims, global_actor_critic, global_episode_index, rewards_per_episode, optimizer):
-        super(WorkerAgent, self).__init__()
-
-        # Initizalize parameters
-        self.name = name
-        self.env_id = env_id
-        self.gamma = gamma
-        self.tau = tau
-        self.learning_rate = learning_rate
-        self.max_reward = max_reward
-        self.max_timestep = max_timestep
-        self.max_episodes = max_episodes
-        self.replay_buffer_size = replay_buffer_size
-        self.hidden_dims = hidden_dims
-        self.global_actor_critic = global_actor_critic
-        self.global_episode_index = global_episode_index
-        self.rewards_per_episode = rewards_per_episode
-        self.optimizer = optimizer
-        self.env_make_params = env_make_params
-
-        # Create instance of the environment.
-        self.env = gym.make(self.env_id, render_mode=None, **self.env_make_params)
-
-        # Number of possible actions & observation space size
-        self.num_states = self.env.observation_space.shape[0]
-        self.num_actions = self.env.action_space.n
-
-        # Initialize the Local Actor Critic Network
-        self.local_actor_critic = A3CActorCritic(self.num_states, self.num_actions, self.gamma, self.replay_buffer_size, self.hidden_dims)
-        self.global_actor_critic = global_actor_critic
-
-
-
-    def run(self):
-        while True:
-            # Use a local variable to track the global episode count
-            with self.global_episode_index.get_lock():
-                local_episode_index = self.global_episode_index.value
-
-            if local_episode_index >= self.max_episodes:
-                print(f"{self.name} stopping: global episode count reached max_episodes {self.max_episodes}.")
-                break
-
-            # Initialize environment, variables, and run episode
-            state, _ = self.env.reset()
-            terminated = False
-            episode_reward = 0.0
-            self.step_count = 0
-
-            while not terminated and self.step_count < self.max_timestep:
-                action = self.local_actor_critic.choose_action(state)
-                next_state, reward, terminated, _, _ = self.env.step(action)
-                episode_reward += reward
-                self.local_actor_critic.memory.add(state, action, reward, terminated)
-                self.step_count += 1
-                state = next_state
-
-            # Train after each episode
-            self.train(terminated)
-
-            # Update the global episode index and rewards
-            with self.global_episode_index.get_lock():
-                self.global_episode_index.value += 1
-                current_global_episode = self.global_episode_index.value
-
-            with self.rewards_per_episode.get_lock():
-                self.rewards_per_episode[current_global_episode] = episode_reward
-
-            print(self.name, 'episode ', current_global_episode, 'reward %.1f' % episode_reward)
-
-    def train(self, terminated):
-        # Calculate the Actor Critic loss
-        loss = self.local_actor_critic.calc_loss(terminated) 
-        self.optimizer.zero_grad()
-        loss.backward()
-
-        # takes gradients from local agent and throws them over to global agent
-        for local_param, global_param in zip(
-            self.local_actor_critic.parameters(),
-            self.global_actor_critic.parameters()):
-                global_param._grad = local_param.grad
-        
-        self.optimizer.step()
-        # Update the weights from the Global Network to the Worker Network
-        self.local_actor_critic.load_state_dict(self.global_actor_critic.state_dict())
-
-        # Clears previous episode memory
-        self.local_actor_critic.memory.reset()
-
 
 # A3C Agent
 class GlobalAgent():
-    def __init__(self, is_training, endless, continue_training, render, use_gpu, hyperparameter_set):
+    def __init__(self, is_training, endless, continue_training, render, hyperparameter_set):
         with open(os.path.join(os.getcwd(), 'hyperparameters.yml'), 'r') as file:
             all_hyperparameter_sets = yaml.safe_load(file)
             hyperparameters = all_hyperparameter_sets[hyperparameter_set]
 
         self.hyperparameter_set = hyperparameter_set
-        self.is_training = is_training
         self.continue_training = continue_training
+        self.is_training = is_training
+        
         self.env_id                 = hyperparameters['env_id']
         self.input_model_name       = hyperparameters['input_model_name']
         self.output_model_name      = hyperparameters['output_model_name']
@@ -161,21 +69,22 @@ class GlobalAgent():
         self.max_reward             = hyperparameters['max_reward']
         self.max_timestep           = hyperparameters['max_timestep']
         self.max_episodes           = hyperparameters['max_episodes']
-        self.hidden_dims           = hyperparameters['hidden_dims']
+        self.hidden_dims            = hyperparameters['hidden_dims']
         self.env_make_params        = hyperparameters.get('env_make_params',{})     # Get optional environment-specific parameters, default to empty dict
 
-        self.highest_average_reward = self.min_reward
-        
         # Global variables that can be modified across threads
         self.global_episode_index = mp.Value('i', 0) # global episode tracker
         self.rewards_per_episode = mp.Array('d', self.max_episodes, lock=True)  # 'd' is for double precision float
 
+        # Set the highest avg to the lowest possible reward
+        self.highest_average_reward = self.min_reward
+
+        # File and data paths
         if self.input_model_name == None:
             self.input_model_name = hyperparameter_set
         if self.output_model_name == None:
             self.output_model_name = hyperparameter_set
 
-        # Path to Run info, create if does not exist
         self.RUNS_DIR = "runs"
         self.INPUT_FILENAME = self.input_model_name
         self.OUTPUT_FILENAME = self.output_model_name
@@ -186,6 +95,7 @@ class GlobalAgent():
 
         self.device = 'cpu'
         self.last_graph_update_time = datetime.now()
+
         # set endless mode if endless arg is true, otherwise set max episodes based on parameters 
         # if endless or not self.is_training:
         #     self.max_episodes = itertools.count()
@@ -195,24 +105,24 @@ class GlobalAgent():
         if self.continue_training:
             self.is_training = True
 
-
+        # holds all of the workers (Asynchronous Envs)
         self.workers = []
 
-        # Create instance of the environment.
+        # Create instance of the environment (Global Agent Env)
         self.env = gym.make(self.env_id, render_mode='human' if render else None, **self.env_make_params)
 
-        # Number of possible actions & observation space size
+        # Numberof possible actions & observation space size
         self.num_actions = self.env.action_space.n
         self.num_states = self.env.observation_space.shape[0]
 
+        # Creates Global Network
         self.global_actor_critic = A3CActorCritic(self.num_states, self.num_actions, self.gamma, self.replay_buffer_size, self.hidden_dims)
         self.global_actor_critic.share_memory()
         self.optimizer = SharedOptimizer(self.global_actor_critic.parameters(), learning_rate=self.learning_rate, betas=(0.92, 0.999))
         
-        
-        
-        if is_training or continue_training:
-            self.env.close() # close the environment as we're just getting num_actions and states from it
+        if self.is_training:
+            self.env.close() # Close the Global Agent Env, (not necessary to have when training)
+
             # Initialize log file
             start_time = datetime.now()
             self.last_graph_update_time = start_time
@@ -222,20 +132,20 @@ class GlobalAgent():
             with open(self.LOG_FILE, 'w') as file:
                 file.write(log_message + '\n')
             
-            if continue_training:
+            if self.continue_training:
                 self.load()
 
             self.run()
 
-        # if we are not training, generate the actor and critic policies based on the saved model
+        # if we are not testing, generate the actor critic policies based on the saved model
         else:
             self.load()
             self.global_actor_critic.eval()
             start_time = datetime.now()
             log_message = f"{start_time.strftime(self.DATE_FORMAT)}: Run starting..."
             print(log_message)
-            # then need to create environment and loop through testing episode 
-            # make a function for this
+            
+            # Test our model in the environment
             self.testing()
             
         
@@ -416,6 +326,100 @@ class GlobalAgent():
             self.workers.append(temp_worker)
         [w.start() for w in self.workers]
         # [w.join() for w in self.workers] 
+
+                
+class WorkerAgent(mp.Process):
+
+    def __init__(self, name, env_id, env_make_params, gamma, tau, learning_rate, max_reward, max_timestep, max_episodes,
+                  replay_buffer_size, hidden_dims, global_actor_critic, global_episode_index, rewards_per_episode, optimizer):
+        super(WorkerAgent, self).__init__()
+
+        # Initizalize parameters
+        self.name = name
+        self.env_id = env_id
+        self.gamma = gamma
+        self.tau = tau
+        self.learning_rate = learning_rate
+        self.max_reward = max_reward
+        self.max_timestep = max_timestep
+        self.max_episodes = max_episodes
+        self.replay_buffer_size = replay_buffer_size
+        self.hidden_dims = hidden_dims
+        self.global_actor_critic = global_actor_critic
+        self.global_episode_index = global_episode_index
+        self.rewards_per_episode = rewards_per_episode
+        self.optimizer = optimizer
+        self.env_make_params = env_make_params
+
+        # Create instance of the environment.
+        self.env = gym.make(self.env_id, render_mode=None, **self.env_make_params)
+
+        # Number of possible actions & observation space size
+        self.num_states = self.env.observation_space.shape[0]
+        self.num_actions = self.env.action_space.n
+
+        # Initialize the Local Actor Critic Network
+        self.local_actor_critic = A3CActorCritic(self.num_states, self.num_actions, self.gamma, self.replay_buffer_size, self.hidden_dims)
+        self.global_actor_critic = global_actor_critic
+
+
+
+    def run(self):
+        while True:
+            # Use a local variable to track the global episode count
+            with self.global_episode_index.get_lock():
+                local_episode_index = self.global_episode_index.value
+
+            if local_episode_index >= self.max_episodes:
+                print(f"{self.name} stopping: global episode count reached max_episodes {self.max_episodes}.")
+                break
+
+            # Initialize environment, variables, and run episode
+            state, _ = self.env.reset()
+            terminated = False
+            episode_reward = 0.0
+            self.step_count = 0
+
+            while not terminated and self.step_count < self.max_timestep:
+                action = self.local_actor_critic.choose_action(state)
+                next_state, reward, terminated, _, _ = self.env.step(action)
+                episode_reward += reward
+                self.local_actor_critic.memory.add(state, action, reward, terminated)
+                self.step_count += 1
+                state = next_state
+
+            # Train after each episode
+            self.train(terminated)
+
+            # Update the global episode index and rewards
+            with self.global_episode_index.get_lock():
+                self.global_episode_index.value += 1
+                current_global_episode = self.global_episode_index.value
+
+            with self.rewards_per_episode.get_lock():
+                self.rewards_per_episode[current_global_episode] = episode_reward
+
+            print(self.name, 'episode ', current_global_episode, 'reward %.1f' % episode_reward)
+
+    def train(self, terminated):
+        # Calculate the Actor Critic loss
+        loss = self.local_actor_critic.calc_loss(terminated) 
+        self.optimizer.zero_grad()
+        loss.backward()
+
+        # takes gradients from local agent and throws them over to global agent
+        for local_param, global_param in zip(
+            self.local_actor_critic.parameters(),
+            self.global_actor_critic.parameters()):
+                global_param._grad = local_param.grad
+        
+        self.optimizer.step()
+        # Update the weights from the Global Network to the Worker Network
+        self.local_actor_critic.load_state_dict(self.global_actor_critic.state_dict())
+
+        # Clears previous episode memory
+        self.local_actor_critic.memory.reset()
+
         
 
 if __name__ == '__main__':
@@ -425,7 +429,6 @@ if __name__ == '__main__':
     parser.add_argument('--train', help='Training mode', action='store_true')
     parser.add_argument('--continue_training', help='Continue training mode', action='store_true')
     parser.add_argument('--render', help='Rendering mode', action='store_true')
-    parser.add_argument('--use_gpu', help='Device mode', action='store_true')
     parser.add_argument('--endless', help='Endless mode', action='store_true')
     args = parser.parse_args()
 
@@ -433,5 +436,5 @@ if __name__ == '__main__':
 
 
     # create global agent
-    globalAgent = GlobalAgent(args.train, args.endless, args.continue_training, args.render, args.use_gpu, hyperparameter_set=args.hyperparameters)
+    globalAgent = GlobalAgent(args.train, args.endless, args.continue_training, args.render, hyperparameter_set=args.hyperparameters)
 
